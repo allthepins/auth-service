@@ -7,8 +7,8 @@ A token-based authentication service for managing user identity, authentication 
 ### Phase 1: MVP
 
 #### Scaffolding and environment
-- [ ] Initialize Go project and initial directory structure.
-- [ ] Configure Docker Compose with go and postgres services.
+- [x] Initialize Go project and initial directory structure.
+- [x] Configure Docker Compose with go and postgres services.
 
 #### Database
 - [ ] Implement initial schema migrations (`users`, `identities`) with `goose`.
