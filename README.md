@@ -11,8 +11,8 @@ A token-based authentication service for managing user identity, authentication 
 - [x] Configure Docker Compose with go and postgres services.
 
 #### Database
-- [ ] Implement initial schema migrations (`users`, `identities`) with `goose`.
-- [ ] Configure `sqlc` and generate initial queriers.
+- [x] Implement initial schema migrations (`users`, `identities`) with `goose`.
+- [x] Configure `sqlc` and generate initial queriers.
 
 #### Core logic & platform
 - [ ] Implement structured logger (use `slog`).
