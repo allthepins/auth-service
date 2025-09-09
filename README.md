@@ -2,6 +2,48 @@
 
 A token-based authentication service for managing user identity, authentication and sessions for web and mobile clients.
 
+***
+
+## Getting started
+
+### Prerequisites
+
+* Go 1.24+
+* Docker
+* [Goose](https://github.com/pressly/goose)
+* [sqlc](https://sqlc.dev/)
+
+### Local setup
+
+1. **Configure environment variables:**
+  ```sh
+  cp .env.example .env
+  ```
+  Review and update the vars in the `.env` file with your values.
+
+2. **Start the services:**
+  ```sh
+  make up
+  ```
+  This builds the go container and starts the API and Postgres services.
+
+3. **Run database migrations:**
+  ```sh
+  make migrate-up
+  ```
+
+The API service should now be running ans accessible at `http://localhost:8080`.
+
+*** 
+
+## Makefile usage
+
+A `Makefile` provides shortcuts for running (some) tasks.
+
+Run `make help` for a descriptive list of what's available.
+
+***
+
 ## Development roadmap
 
 ### Phase 1: MVP
@@ -11,8 +53,8 @@ A token-based authentication service for managing user identity, authentication 
 - [x] Configure Docker Compose with go and postgres services.
 
 #### Database
-- [ ] Implement initial schema migrations (`users`, `identities`) with `goose`.
-- [ ] Configure `sqlc` and generate initial queriers.
+- [x] Implement initial schema migrations (`users`, `identities`) with `goose`.
+- [x] Configure `sqlc` and generate initial queriers.
 
 #### Core logic & platform
 - [ ] Implement structured logger (use `slog`).
