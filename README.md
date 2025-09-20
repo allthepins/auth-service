@@ -58,7 +58,7 @@ Run `make help` for a descriptive list of what's available.
 
 #### Core logic & platform
 - [ ] Implement structured logger (use `slog`).
-- [ ] Implement RSA-based JWT platform (`RS256` so the public key can later be shared for decentralized JWT validation).
+- [ ] Implement RSA-based JWT platform (~`RS256` so the public key can later be shared for decentralized JWT validation~ HS256 for simplicity, make a note to revisit choice of algorithm).
 - [ ] Implement `auth.Service` for email/password registration and login.
 - [ ] Add unit tests for the `auth.Service`.
 
@@ -106,3 +106,6 @@ Run `make help` for a descriptive list of what's available.
 - [ ] Implement structured configuration from environment variables.
 - [ ] Write comprehensive integration tests for all API flows.
 - [ ] Revisit and finalize documentation and `Makefile` scripts.
+
+#### Nice-to-haves
+- [ ] Implement support for secret key rotation
