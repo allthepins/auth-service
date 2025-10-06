@@ -1,6 +1,14 @@
-# Auth Service
+# Don't roll your own auth
 
-A token-based authentication service for managing user identity, authentication and sessions for web and mobile clients.
+Seriously, don't.
+
+There are lots of tried and tested work-out-of-box solutions out there ([authelia](https://github.com/authelia/authelia) is great if you want everything go).
+
+That being said, this is a token-based authentication microservice for managing user identity, authentication and sessions for web and mobile clients. It's for a toy app I'm working on.
+
+It's still very much a work in progress, and is likely to remain that way for a long while.
+
+I wouldn't use this in production, and neither should you.
 
 ***
 
@@ -32,7 +40,25 @@ A token-based authentication service for managing user identity, authentication 
   make migrate-up
   ```
 
-The API service should now be running ans accessible at `http://localhost:8080`.
+The API service should now be running and accessible at `http://localhost:8080`.
+
+***
+
+## Development
+
+### Running tests
+
+Run all tests:
+```sh
+make test
+```
+
+### Database Code generation
+
+Regenerate database code after modifying SQL queries:
+```sh
+sqlc generate
+```
 
 *** 
 
@@ -57,10 +83,10 @@ Run `make help` for a descriptive list of what's available.
 - [x] Configure `sqlc` and generate initial queriers.
 
 #### Core logic & platform
-- [ ] Implement structured logger (use `slog`).
-- [ ] Implement RSA-based JWT platform (`RS256` so the public key can later be shared for decentralized JWT validation).
-- [ ] Implement `auth.Service` for email/password registration and login.
-- [ ] Add unit tests for the `auth.Service`.
+- [x] Implement structured logger (use `slog`).
+- [x] Implement RSA-based JWT platform (~`RS256` so the public key can later be shared for decentralized JWT validation~ HS256 for simplicity, make a note to revisit choice of algorithm).
+- [x] Implement `auth.Service` for email/password registration and login.
+- [x] Add unit tests for the `auth.Service`.
 
 #### API endpoints
 - [ ] Implement public handlers for `/auth/register` and `/auth/login`.
@@ -106,3 +132,6 @@ Run `make help` for a descriptive list of what's available.
 - [ ] Implement structured configuration from environment variables.
 - [ ] Write comprehensive integration tests for all API flows.
 - [ ] Revisit and finalize documentation and `Makefile` scripts.
+
+#### Nice-to-haves
+- [ ] Implement support for secret key rotation
