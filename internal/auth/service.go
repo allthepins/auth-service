@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/allthepins/auth-service/internal/database"
 	"github.com/allthepins/auth-service/internal/platform/jwt"
@@ -97,7 +98,6 @@ func (s *Service) registerProvider(p Provider) {
 type RegisterRequest struct {
 	Provider    string         `json:"provider"`
 	Credentials map[string]any `json:"credentials"`
-	Roles       []string       `json:"roles,omitempty"`
 }
 
 // LoginRequest contains the info needed to authenticate a user.
@@ -106,11 +106,18 @@ type LoginRequest struct {
 	Credentials map[string]any `json:"credentials"`
 }
 
+// User represents a user's info.
+type User struct {
+	ID        string    `json:"id"`
+	Roles     []string  `json:"roles"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
 // AuthResponse contains the auth response with tokens and user info.
 type AuthResponse struct {
-	AccessToken string   `json:"access_token"`
-	UserID      string   `json:"user_id"`
-	Roles       []string `json:"roles"`
+	AccessToken string `json:"accessToken"`
+	User        User   `json:"user"`
 }
 
 // Register creates a new user account with the specified provider and credentials.
@@ -153,10 +160,10 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*AuthRespo
 	var user database.AuthUser
 	err = s.withTx(ctx, func(qtx database.Querier) error {
 		userID := uuid.New()
-		roles := req.Roles
-		if len(roles) == 0 {
-			roles = []string{"user"}
-		}
+
+		// Always assign default "user" role
+		// TODO Create admin endpoints letter for role management
+		roles := []string{"user"}
 
 		user, err = qtx.CreateUser(ctx, database.CreateUserParams{
 			ID:    userID,
@@ -199,8 +206,12 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*AuthRespo
 
 	return &AuthResponse{
 		AccessToken: accessToken,
-		UserID:      user.ID.String(),
-		Roles:       user.Roles,
+		User: User{
+			ID:        user.ID.String(),
+			Roles:     user.Roles,
+			CreatedAt: user.CreatedAt,
+			UpdatedAt: user.UpdatedAt,
+		},
 	}, nil
 }
 
@@ -262,8 +273,12 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*AuthResponse, e
 
 	return &AuthResponse{
 		AccessToken: accessToken,
-		UserID:      user.ID.String(),
-		Roles:       user.Roles,
+		User: User{
+			ID:        user.ID.String(),
+			Roles:     user.Roles,
+			CreatedAt: user.CreatedAt,
+			UpdatedAt: user.UpdatedAt,
+		},
 	}, nil
 }
 
