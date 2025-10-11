@@ -1,0 +1,492 @@
+openapi: 3.0.3
+info:
+  title: Auth Service API
+  description: API specification for a token-based authentication service.
+  version: 0.0.1
+
+servers:
+  - url: https://api.example.com/v1
+    description: Production Environment
+  - url: http://localhost:8080/v1
+    description: Development Environment
+
+tags:
+  - name: Authentication
+    description: Endpoints for user login, registration, and token management.
+  - name: Session Management
+    description: Endpoints for viewing and revoking active user sessions.
+  - name: Account Management
+    description: Endpoints for password recovery and account self-service.
+  - name: Internal
+    description: Endpoints for inter-service communication and public key distribution.
+
+paths:
+  /auth/register:
+    post:
+      tags:
+        - Authentication
+      summary: Register a new user
+      description: Creates a new user account and returns authentication tokens. Users are automatically logged in upon registration.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            examples:
+              EmailRegistration:
+                summary: Register with email and password
+                value:
+                  provider: "email_password"
+                  credentials:
+                    email: "new.user@example.com"
+                    password: "a-very-strong-password-123!"
+              UsernameRegistration:
+                summary: Register with a username and password
+                value:
+                  provider: "username"
+                  credentials:
+                    username: "newuser"
+                    password: "a-very-strong-password-123!"
+                    email: "new.user@example.com"
+              OtpRegistration:
+                summary: Register with only an email (passwordless)
+                value:
+                  provider: "email_otp"
+                  credentials:
+                    email: "passwordless.user@example.com"
+              GoogleRegistration:
+                summary: Register with a Google ID Token
+                value:
+                  provider: "google"
+                  credentials:
+                    idToken: "eyJhbGciOiJSUzI1NiIsImtpZCI6..."
+      responses:
+        '201':
+          description: User successfully created and logged in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: An account with this identifier already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: User Login
+      description: Authenticates a user and returns an access and refresh token pair.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            examples:
+              EmailLogin:
+                summary: Login with email and password
+                value:
+                  provider: "email_password"
+                  credentials:
+                    email: "test.user@example.com"
+                    password: "user-password-123"
+              UsernameLogin:
+                summary: Login with username and password
+                value:
+                  provider: "username"
+                  credentials:
+                    username: "test.user"
+                    password: "user-password-123"
+              EmailOtpLogin:
+                summary: Login with a one-time password sent via email
+                value:
+                  provider: "email_otp"
+                  credentials:
+                    email: "test.user@example.com"
+                    otp: "123456"
+              GoogleLogin:
+                summary: Login with a Google ID Token
+                value:
+                  provider: "google"
+                  credentials:
+                    idToken: "eyJhbGciOiJSUzI1NiIsImtpZCI6..."
+      responses:
+        '200':
+          description: Successful login.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/refresh:
+    post:
+      tags:
+        - Authentication
+      summary: Refresh Access Token
+      description: >
+        Obtains a new access and refresh token pair using a valid refresh token.
+        **This invalidates the submitted refresh token (token rotation).**
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken:
+                  type: string
+                  description: The refresh token (for mobile clients; web clients use a cookie).
+                  example: "def50200..."
+      responses:
+        '200':
+          description: New token pair generated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/logout:
+    post:
+      tags:
+        - Authentication
+      summary: User Logout
+      description: Invalidates the user's current session by revoking the refresh token.
+      responses:
+        '204':
+          description: Successfully logged out.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/sessions:
+    get:
+      tags:
+        - Session Management
+      summary: List Active Sessions
+      description: Retrieves a list of all active sessions for the authenticated user.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: A list of active sessions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Session'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/sessions/{sessionId}:
+    delete:
+      tags:
+        - Session Management
+      summary: Revoke a Specific Session
+      description: Remotely logs out a specific device or session.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          description: The unique identifier of the session to revoke.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: The session was successfully revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /auth/forgot-password:
+    post:
+      tags:
+        - Account Management
+      summary: Forgot Password
+      description: Initiates the password reset process by sending an email to the user.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+              required:
+                - email
+      responses:
+        '202':
+          description: If an account with the email exists, a reset link has been sent.
+
+  /auth/reset-password:
+    post:
+      tags:
+        - Account Management
+      summary: Reset Password
+      description: Sets a new password using a valid reset token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+      responses:
+        '200':
+          description: Password has been successfully updated.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /auth/validate:
+    post:
+      tags:
+        - Internal
+      summary: Validate Access Token
+      description: (INTERNAL USE ONLY) Validates an access token. Intended for use by API gateways.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccessToken'
+      responses:
+        '200':
+          description: Token is valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /.well-known/jwks.json:
+    get:
+      tags:
+        - Internal
+      summary: Get JSON Web Key Set (JWKS)
+      description: (PUBLIC) Exposes the public keys used to verify JWT signatures.
+      responses:
+        '200':
+          description: The JSON Web Key Set.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: object
+
+components:
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        roles:
+          type: array
+          items:
+            type: string
+          example: ["user"]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    
+    AuthResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        refreshToken:
+          type: string
+          example: "def50200af6b43939b23820b120f217e..."
+          description: Refresh token (not yet implemented - Phase 2)
+        user:
+          $ref: '#/components/schemas/User'
+    
+    # --- Request Schemas with 'oneOf' for Polymorphism ---
+    RegisterRequest:
+      type: object
+      properties:
+        provider:
+          type: string
+          enum: [email_password, username, google, email_otp]
+        credentials:
+          oneOf:
+            - $ref: '#/components/schemas/CredentialsPassword'
+            - $ref: '#/components/schemas/CredentialsUsernameRegister'
+            - $ref: '#/components/schemas/CredentialsGoogle'
+            - $ref: '#/components/schemas/CredentialsEmail'
+      required: [provider, credentials]
+
+    LoginRequest:
+      type: object
+      properties:
+        provider:
+          type: string
+          enum: [email_password, username, google, email_otp]
+        credentials:
+          oneOf:
+            - $ref: '#/components/schemas/CredentialsPassword'
+            - $ref: '#/components/schemas/CredentialsUsernameLogin'
+            - $ref: '#/components/schemas/CredentialsGoogle'
+            - $ref: '#/components/schemas/CredentialsOtp'
+      required: [provider, credentials]
+
+    # --- Credential Types ---
+    CredentialsPassword:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+      required: [email, password]
+    CredentialsUsernameRegister:
+      type: object
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+        email:
+          type: string
+          format: email
+      required: [username, password, email]
+    CredentialsUsernameLogin:
+      type: object
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+      required: [username, password]
+    CredentialsGoogle:
+      type: object
+      properties:
+        idToken:
+          type: string
+      required: [idToken]
+    CredentialsEmail:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+      required: [email]
+    CredentialsOtp:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        otp:
+          type: string
+      required: [email, otp]
+      
+    # --- Other Schemas ---
+    TokenPair:
+      type: object
+      properties:
+        accessToken:
+          type: string
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        refreshToken:
+          type: string
+          example: "def50200af6b43939b23820b120f217e..."
+    AccessToken:
+      type: object
+      properties:
+        accessToken:
+          type: string
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+    Session:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        ipAddress:
+          type: string
+          format: ipv4
+          example: "89.123.45.67"
+        userAgent:
+          type: string
+          example: "Chrome/128.0.0.0 Safari/537.36"
+        lastUsedAt:
+          type: string
+          format: date-time
+    PasswordResetRequest:
+      type: object
+      properties:
+        resetToken:
+          type: string
+        newPassword:
+          type: string
+          format: password
+          minLength: 8
+      required: [resetToken, newPassword]
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+          example: "INVALID_CREDENTIALS"
+        message:
+          type: string
+          example: "The credentials provided are incorrect."
+
+  responses:
+    BadRequest:
+      description: The request body is malformed or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Authentication failed or is required.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: The requested resource was not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: A JWT access token obtained via the `/auth/login` endpoint.
