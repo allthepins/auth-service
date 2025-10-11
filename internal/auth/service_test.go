@@ -262,14 +262,69 @@ func TestService_Register(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, resp)
 		assert.Equal(t, "test-token", resp.AccessToken)
-		assert.Equal(t, userID.String(), resp.UserID)
-		assert.Equal(t, []string{"user"}, resp.Roles)
+		assert.Equal(t, userID.String(), resp.User.ID)
+		assert.Equal(t, []string{"user"}, resp.User.Roles)
 
 		conn.AssertExpectations(t)
 		querier.AssertExpectations(t)
 		txQuerier.AssertExpectations(t)
 		tx.AssertExpectations(t)
 		jwtMock.AssertExpectations(t)
+	})
+
+	t.Run("assigns default user role", func(t *testing.T) {
+		conn := &mockTxBeginner{}
+		querier := &mockQuerier{}
+		txQuerier := &mockQuerier{}
+		tx := &mockTx{}
+		jwtMock := &mockJWT{}
+		logger := slog.Default()
+
+		service, err := auth.NewService(auth.Config{
+			Conn:    conn,
+			Querier: querier,
+			JWT:     jwtMock,
+			Logger:  logger,
+		})
+		require.NoError(t, err)
+
+		userID := uuid.New()
+		user := database.AuthUser{
+			ID:    userID,
+			Roles: []string{"user"},
+		}
+
+		querier.On("GetIdentityByProvider", ctx, mock.Anything).Return(database.AuthIdentity{}, pgx.ErrNoRows)
+		conn.On("Begin", ctx).Return(tx, nil)
+		querier.On("WithTx", tx).Return(txQuerier)
+
+		// Verify that CreateUser is called with exactly ["user"]
+		txQuerier.On("CreateUser", ctx, mock.MatchedBy(func(arg database.CreateUserParams) bool {
+			// Ensure roles is exactly ["user"], no more, no less
+			if len(arg.Roles) != 1 {
+				return false
+			}
+			return arg.Roles[0] == "user"
+		})).Return(user, nil)
+
+		txQuerier.On("CreateIdentity", ctx, mock.Anything).Return(database.AuthIdentity{}, nil)
+		tx.On("Commit", ctx).Return(nil)
+		jwtMock.On("GenerateToken", userID.String()).Return("test-token", nil)
+
+		req := auth.RegisterRequest{
+			Provider: "email_password",
+			Credentials: map[string]any{
+				"email":    "test@example.com",
+				"password": "SecurePass123!",
+			},
+		}
+
+		resp, err := service.Register(ctx, req)
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"user"}, resp.User.Roles)
+
+		txQuerier.AssertExpectations(t)
 	})
 
 	t.Run("user already exists", func(t *testing.T) {
