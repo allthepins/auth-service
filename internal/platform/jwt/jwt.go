@@ -1,3 +1,4 @@
+// Package jwt provides JSON Web Token generation and validation for access tokens.
 package jwt
 
 import (
@@ -65,7 +66,7 @@ func (j *jwtAuth) ValidateToken(tokenString string) (string, error) {
 	token, err := jwtv5.ParseWithClaims(
 		tokenString,
 		&claims,
-		func(token *jwtv5.Token) (interface{}, error) {
+		func(token *jwtv5.Token) (any, error) {
 			// Ensure the signing method is what we expect
 			if _, ok := token.Method.(*jwtv5.SigningMethodHMAC); !ok {
 				return nil, errors.New("unexpected signing method")

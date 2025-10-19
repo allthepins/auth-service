@@ -10,6 +10,7 @@ import (
 
 	"github.com/allthepins/auth-service/internal/database"
 	"github.com/allthepins/auth-service/internal/platform/jwt"
+	"github.com/allthepins/auth-service/internal/platform/token"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -21,6 +22,7 @@ var (
 	ErrUserExists         = errors.New("user already exists")
 	ErrInvalidProvider    = errors.New("invalid provider")
 	ErrInvalidInput       = errors.New("invalid input")
+	ErrInvalidToken       = errors.New("invalid or expired token")
 )
 
 // TxBeginner defines an interface for starting a database transaction.
@@ -39,19 +41,23 @@ type Querier interface {
 
 // Service provides authentication and user management functionality.
 type Service struct {
-	conn      TxBeginner
-	querier   Querier
-	jwt       jwt.Auth
-	logger    *slog.Logger
-	providers map[string]Provider
+	conn               TxBeginner
+	querier            Querier
+	jwt                jwt.Auth
+	tokenManager       token.Manager
+	logger             *slog.Logger
+	providers          map[string]Provider
+	refreshTokenExpiry time.Duration
 }
 
 // Config holds the configuration for the auth service
 type Config struct {
-	Conn    TxBeginner
-	Querier Querier
-	JWT     jwt.Auth
-	Logger  *slog.Logger
+	Conn               TxBeginner
+	Querier            Querier
+	JWT                jwt.Auth
+	TokenManager       token.Manager
+	Logger             *slog.Logger
+	RefreshTokenExpiry time.Duration
 }
 
 // Validate checks that all required fields in the Config are set.
@@ -65,8 +71,14 @@ func (c Config) Validate() error {
 	if c.JWT == nil {
 		return errors.New("JWT service is required")
 	}
+	if c.TokenManager == nil {
+		return errors.New("token manager is required")
+	}
 	if c.Logger == nil {
 		return errors.New("logger is required")
+	}
+	if c.RefreshTokenExpiry == 0 {
+		return errors.New("refresh token expiry is required")
 	}
 	return nil
 }
@@ -78,11 +90,13 @@ func NewService(c Config) (*Service, error) {
 	}
 
 	s := &Service{
-		conn:      c.Conn,
-		querier:   c.Querier,
-		jwt:       c.JWT,
-		logger:    c.Logger,
-		providers: make(map[string]Provider),
+		conn:               c.Conn,
+		querier:            c.Querier,
+		jwt:                c.JWT,
+		tokenManager:       c.TokenManager,
+		logger:             c.Logger,
+		providers:          make(map[string]Provider),
+		refreshTokenExpiry: c.RefreshTokenExpiry,
 	}
 
 	s.registerProvider(NewEmailPasswordProvider())
@@ -116,8 +130,9 @@ type User struct {
 
 // AuthResponse contains the auth response with tokens and user info.
 type AuthResponse struct {
-	AccessToken string `json:"accessToken"`
-	User        User   `json:"user"`
+	AccessToken  string `json:"accessToken"`
+	RefreshToken string `json:"refreshToken"`
+	User         User   `json:"user"`
 }
 
 // Register creates a new user account with the specified provider and credentials.
@@ -204,8 +219,17 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*AuthRespo
 		"identifier", identifier,
 	)
 
+	// TODO Look into if it's better practice to include refresh token creation in
+	// the 'register' transaction, as refresh token generation failure is a data integrity issue.
+	refreshToken, err := s.createRefreshToken(ctx, user.ID)
+	if err != nil {
+		s.logger.Error("failed to create refresh token", "error", err)
+		return nil, err
+	}
+
 	return &AuthResponse{
-		AccessToken: accessToken,
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
 		User: User{
 			ID:        user.ID.String(),
 			Roles:     user.Roles,
@@ -265,6 +289,12 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*AuthResponse, e
 		return nil, err
 	}
 
+	refreshToken, err := s.createRefreshToken(ctx, user.ID)
+	if err != nil {
+		s.logger.Error("failed to create refresh token", "error", err)
+		return nil, err
+	}
+
 	s.logger.Info("user logged in successfully",
 		"user_id", user.ID,
 		"provider", req.Provider,
@@ -272,7 +302,8 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*AuthResponse, e
 	)
 
 	return &AuthResponse{
-		AccessToken: accessToken,
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
 		User: User{
 			ID:        user.ID.String(),
 			Roles:     user.Roles,
@@ -316,4 +347,117 @@ func (s *Service) withTx(ctx context.Context, fn func(database.Querier) error) e
 	}
 
 	return tx.Commit(ctx)
+}
+
+// createRefreshToken generates and stores a new refresh token for the user.
+func (s *Service) createRefreshToken(ctx context.Context, userID uuid.UUID) (string, error) {
+	refreshToken, err := s.tokenManager.Generate()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate refresh token: %w", err)
+	}
+
+	tokenHash, err := s.tokenManager.Hash(refreshToken)
+	if err != nil {
+		return "", fmt.Errorf("failed to hash refresh token: %w", err)
+	}
+
+	expiresAt := time.Now().Add(s.refreshTokenExpiry)
+
+	_, err = s.querier.CreateRefreshToken(ctx, database.CreateRefreshTokenParams{
+		ID:        uuid.New(),
+		UserID:    userID,
+		TokenHash: tokenHash,
+		ExpiresAt: expiresAt,
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("failed to store refresh token: %w", err)
+	}
+
+	return refreshToken, nil
+}
+
+// Refresh validates a given refresh token and issues new access and refresh tokens.
+// The old (given) refresh token is revoked (i.e. rotated).
+func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthResponse, error) {
+	tokenHash, err := s.tokenManager.Hash(refreshToken)
+	if err != nil {
+		s.logger.Error("failed to hash provided refresh token", "error", err)
+		return nil, ErrInvalidToken
+	}
+
+	storedToken, err := s.querier.GetRefreshTokenByHash(ctx, tokenHash)
+	if err == pgx.ErrNoRows {
+		s.logger.Warn("refresh token not found or already revoked")
+		return nil, ErrInvalidToken
+	}
+	if err != nil {
+		s.logger.Error("database error fetching refresh token", "error", err)
+		return nil, err
+	}
+
+	if time.Now().After(storedToken.ExpiresAt) {
+		s.logger.Warn("refresh token has expired", "user_id", storedToken.UserID)
+		return nil, ErrInvalidToken
+	}
+
+	if err := s.tokenManager.Verify(refreshToken, storedToken.TokenHash); err != nil {
+		s.logger.Warn("refresh token verification failed", "error", err)
+		return nil, ErrInvalidToken
+	}
+
+	// Revoke the old token
+	if err := s.querier.RevokeRefreshToken(ctx, tokenHash); err != nil {
+		s.logger.Error("failed to revoke old refresh token", "error", err)
+	}
+
+	// Fetch user
+	user, err := s.querier.GetUserByID(ctx, storedToken.UserID)
+	if err != nil {
+		s.logger.Error("failed to fetch user", "error", err, "user_id", storedToken.UserID)
+		return nil, err
+	}
+
+	// Generate new tokens
+	accessToken, err := s.jwt.GenerateToken(user.ID.String())
+	if err != nil {
+		s.logger.Error("failed to generate new access token", "error", err)
+		return nil, err
+	}
+
+	newRefreshToken, err := s.createRefreshToken(ctx, user.ID)
+	if err != nil {
+		s.logger.Error("failed to create new refresh token", "error", err)
+		return nil, err
+	}
+
+	s.logger.Info("tokens refreshed successfully", "user_id", user.ID)
+
+	return &AuthResponse{
+		AccessToken:  accessToken,
+		RefreshToken: newRefreshToken,
+		User: User{
+			ID:        user.ID.String(),
+			Roles:     user.Roles,
+			CreatedAt: user.CreatedAt,
+			UpdatedAt: user.UpdatedAt,
+		},
+	}, nil
+}
+
+// Logout revokes a refresh token.
+func (s *Service) Logout(ctx context.Context, refreshToken string) error {
+	tokenHash, err := s.tokenManager.Hash(refreshToken)
+	if err != nil {
+		s.logger.Error("failed to hash refresh token for logout", "error", err)
+		return ErrInvalidToken
+	}
+
+	if err := s.querier.RevokeRefreshToken(ctx, tokenHash); err != nil {
+		s.logger.Error("failed to revoke refresh token", "error", err)
+		return err
+	}
+
+	s.logger.Info("user logged out successfully")
+	return nil
 }

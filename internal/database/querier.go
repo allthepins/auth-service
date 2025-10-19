@@ -12,9 +12,13 @@ import (
 
 type Querier interface {
 	CreateIdentity(ctx context.Context, arg CreateIdentityParams) (AuthIdentity, error)
+	CreateRefreshToken(ctx context.Context, arg CreateRefreshTokenParams) (AuthRefreshToken, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (AuthUser, error)
 	GetIdentityByProvider(ctx context.Context, arg GetIdentityByProviderParams) (AuthIdentity, error)
+	GetRefreshTokenByHash(ctx context.Context, tokenHash string) (AuthRefreshToken, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (AuthUser, error)
+	RevokeAllUserRefreshTokens(ctx context.Context, userID uuid.UUID) error
+	RevokeRefreshToken(ctx context.Context, tokenHash string) error
 }
 
 var _ Querier = (*Queries)(nil)

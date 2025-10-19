@@ -20,6 +20,15 @@ type AuthIdentity struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+type AuthRefreshToken struct {
+	ID        uuid.UUID  `json:"id"`
+	UserID    uuid.UUID  `json:"user_id"`
+	TokenHash string     `json:"token_hash"`
+	ExpiresAt time.Time  `json:"expires_at"`
+	RevokedAt *time.Time `json:"revoked_at"`
+	CreatedAt time.Time  `json:"created_at"`
+}
+
 type AuthUser struct {
 	ID        uuid.UUID `json:"id"`
 	Roles     []string  `json:"roles"`
