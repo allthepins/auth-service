@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/allthepins/auth-service/internal/api/handlers"
+	"github.com/allthepins/auth-service/internal/api/middleware"
 	"github.com/allthepins/auth-service/internal/auth"
 	"github.com/allthepins/auth-service/internal/config"
 	"github.com/allthepins/auth-service/internal/database"
@@ -89,7 +90,7 @@ func main() {
 	// Setup router
 	r := chi.NewRouter()
 
-	// middleware
+	// Global middleware
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
 	r.Use(httplog.RequestLogger(log, &httplog.Options{
@@ -106,6 +107,14 @@ func main() {
 
 	// Public routes
 	r.Post("/auth/register", authHandler.Register)
+	r.Post("/auth/login", authHandler.Login)
+	r.Post("/auth/refresh", authHandler.Refresh)
+
+	// Protected routes
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.Auth(jwtAuth, log))
+		r.Post("/auth/logout", authHandler.Logout)
+	})
 
 	// Start server
 	addr := fmt.Sprintf(":%s", cfg.Server.Port)

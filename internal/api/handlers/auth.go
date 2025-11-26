@@ -67,6 +67,89 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Login handles user authentication.
+// POST /auth/login
+func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := response.Error(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid request body"); err != nil {
+			h.logger.Error("failed to write error response", "error", err)
+		}
+		return
+	}
+
+	resp, err := h.service.Login(r.Context(), auth.LoginRequest{
+		Provider:    req.Provider,
+		Credentials: req.Credentials,
+	})
+
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	if err := response.JSON(w, http.StatusOK, resp); err != nil {
+		h.logger.Error("failed to write response", "error", err)
+	}
+}
+
+// Refresh handles token refresh.
+// POST /auth/refresh
+func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+	var req RefreshRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := response.Error(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid request body"); err != nil {
+			h.logger.Error("failed to write error response", "error", err)
+		}
+		return
+	}
+
+	if req.RefreshToken == "" {
+		if err := response.Error(w, http.StatusBadRequest, "BAD_REQUEST", "Refresh token is required"); err != nil {
+			h.logger.Error("failed to write error response", "error", err)
+		}
+		return
+	}
+
+	resp, err := h.service.Refresh(r.Context(), req.RefreshToken)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	if err := response.JSON(w, http.StatusOK, resp); err != nil {
+		h.logger.Error("failed to write response", "error", err)
+	}
+}
+
+// Logout handles user logout.
+// POST /auth/logout
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	var req RefreshRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := response.Error(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid request body"); err != nil {
+			h.logger.Error("failed to write error response", "error", err)
+		}
+		return
+	}
+
+	if req.RefreshToken == "" {
+		if err := response.Error(w, http.StatusBadRequest, "BAD_REQUEST", "Refresh token is required"); err != nil {
+			h.logger.Error("failed to write error response", "error", err)
+		}
+		return
+	}
+
+	err := h.service.Logout(r.Context(), req.RefreshToken)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	// 204 No Content for successful logout
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleError maps service errors to appropriate HTTP responses.
 func (h *AuthHandler) handleError(w http.ResponseWriter, err error) {
 	var respErr error
