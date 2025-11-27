@@ -401,11 +401,6 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthRespon
 		return nil, ErrInvalidToken
 	}
 
-	if err := s.tokenManager.Verify(refreshToken, storedToken.TokenHash); err != nil {
-		s.logger.Warn("refresh token verification failed", "error", err)
-		return nil, ErrInvalidToken
-	}
-
 	// Revoke the old token
 	if err := s.querier.RevokeRefreshToken(ctx, tokenHash); err != nil {
 		s.logger.Error("failed to revoke old refresh token", "error", err)

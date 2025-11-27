@@ -143,11 +143,6 @@ func (m *mockTokenManager) Hash(token string) (string, error) {
 	return args.String(0), args.Error(1)
 }
 
-func (m *mockTokenManager) Verify(token, hash string) error {
-	args := m.Called(token, hash)
-	return args.Error(0)
-}
-
 func TestNewService(t *testing.T) {
 	t.Run("successful creation", func(t *testing.T) {
 		conn := &mockTxBeginner{}
@@ -768,9 +763,6 @@ func TestService_Refresh(t *testing.T) {
 
 		// Mock: Get stored token
 		querier.On("GetRefreshTokenByHash", ctx, oldTokenHash).Return(storedToken, nil)
-
-		// Mock: Verify token
-		tokenMgr.On("Verify", "old-refresh-token", oldTokenHash).Return(nil)
 
 		// Mock: Revoke old token
 		querier.On("RevokeRefreshToken", ctx, oldTokenHash).Return(nil)
