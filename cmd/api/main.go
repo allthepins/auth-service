@@ -8,7 +8,6 @@ import (
 	"os"
 
 	"github.com/allthepins/auth-service/internal/api/handlers"
-	"github.com/allthepins/auth-service/internal/api/middleware"
 	"github.com/allthepins/auth-service/internal/auth"
 	"github.com/allthepins/auth-service/internal/config"
 	"github.com/allthepins/auth-service/internal/database"

@@ -2,6 +2,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -11,14 +12,23 @@ import (
 	"github.com/allthepins/auth-service/internal/auth"
 )
 
+// AuthService defines the interface for authentication operations.
+// (Defined this interface to allow the handler to also work with mocks for tests).
+type AuthService interface {
+	Register(ctx context.Context, req auth.RegisterRequest) (*auth.AuthResponse, error)
+	Login(ctx context.Context, req auth.LoginRequest) (*auth.AuthResponse, error)
+	Refresh(ctx context.Context, refreshToken string) (*auth.AuthResponse, error)
+	Logout(ctx context.Context, refreshToken string) error
+}
+
 // AuthHandler handles authentication-related HTTP requests.
 type AuthHandler struct {
-	service *auth.Service
+	service AuthService
 	logger  *slog.Logger
 }
 
 // NewAuthHandler creates a new auth handler.
-func NewAuthHandler(service *auth.Service, logger *slog.Logger) *AuthHandler {
+func NewAuthHandler(service AuthService, logger *slog.Logger) *AuthHandler {
 	return &AuthHandler{
 		service: service,
 		logger:  logger,
