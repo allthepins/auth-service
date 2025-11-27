@@ -109,12 +109,7 @@ func main() {
 	r.Post("/auth/register", authHandler.Register)
 	r.Post("/auth/login", authHandler.Login)
 	r.Post("/auth/refresh", authHandler.Refresh)
-
-	// Protected routes
-	r.Group(func(r chi.Router) {
-		r.Use(middleware.Auth(jwtAuth, log))
-		r.Post("/auth/logout", authHandler.Logout)
-	})
+	r.Post("/auth/logout", authHandler.Logout)
 
 	// Start server
 	addr := fmt.Sprintf(":%s", cfg.Server.Port)
