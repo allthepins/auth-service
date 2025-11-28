@@ -6,10 +6,9 @@ package token
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
-	"errors"
-
-	"golang.org/x/crypto/bcrypt"
+	"encoding/hex"
 )
 
 // tokenLength is the byte length of tokens.
@@ -21,20 +20,17 @@ const bcryptCost = 11 // 1 more than default cost
 type Manager interface {
 	Generate() (string, error)
 	Hash(token string) (string, error)
-	Verify(token, hash string) error
 }
 
 // tokenManager implements the Manager interace.
 type tokenManager struct {
 	tokenLength int
-	bcryptCost  int
 }
 
 // New creates a new token manager.
 func New() Manager {
 	return &tokenManager{
 		tokenLength: tokenLength,
-		bcryptCost:  bcryptCost,
 	}
 }
 
@@ -47,24 +43,11 @@ func (m *tokenManager) Generate() (string, error) {
 	return base64.URLEncoding.EncodeToString(b), nil
 }
 
-// Hash generates a bcrypt hash of a given token.
+// Hash generates a SHA-256 hash of a given token.
+// TODO: This was refactored form using SHA-256 instead of bcrypt because
+// refresh tokens need deterministic hashing (so they can be looked up in the database),
+// and bcrypt generates different hashes each time due to being randomlly salted.
 func (m *tokenManager) Hash(token string) (string, error) {
-	h, err := bcrypt.GenerateFromPassword([]byte(token), m.bcryptCost)
-	if err != nil {
-		return "", err
-	}
-	return string(h), nil
-}
-
-// Verify checks if a token matches its hash.
-func (m *tokenManager) Verify(token, hash string) error {
-	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(token))
-	if err != nil {
-		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
-			return errors.New("token does not match")
-		}
-		return err
-	}
-
-	return nil
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:]), nil
 }

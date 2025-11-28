@@ -153,7 +153,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TokenPair'
+                $ref: '#/components/schemas/AuthResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
 
@@ -162,13 +162,38 @@ paths:
       tags:
         - Authentication
       summary: User Logout
-      description: Invalidates the user's current session by revoking the refresh token.
+      description: >
+        Invalidates the user's refresh token, effectively logging them out.
+        This is a public endpoint - only the refresh token is required (no Bearer token).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken:
+                  type: string
+                  description: The refresh token to revoke
+                  example: "abc123def456..."
+              required:
+                - refreshToken
       responses:
         '204':
-          description: Successfully logged out.
+          description: Successfully logged out (refresh token revoked).
+        '400':
+          description: Bad request (missing or invalid refresh token).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
-          $ref: '#/components/responses/Unauthorized'
-
+          description: Invalid or expired refresh token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  
   /auth/sessions:
     get:
       tags:
@@ -324,7 +349,7 @@ components:
         refreshToken:
           type: string
           example: "def50200af6b43939b23820b120f217e..."
-          description: Refresh token (not yet implemented - Phase 2)
+          description: Refresh token
         user:
           $ref: '#/components/schemas/User'
     

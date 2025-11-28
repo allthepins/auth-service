@@ -36,14 +36,51 @@ func TestGenerate(t *testing.T) {
 	})
 }
 
-func TestHashAndVerify(t *testing.T) {
+func TestHash(t *testing.T) {
 	manager := token.New()
 
-	t.Run("hash and verify valid token", func(t *testing.T) {
+	t.Run("hash is deterministic", func(t *testing.T) {
 		tok, err := manager.Generate()
 		if err != nil {
 			t.Fatalf("failed to generate token: %v", err)
 		}
+
+		hash1, err := manager.Hash(tok)
+		if err != nil {
+			t.Fatalf("failed to hash token: %v", err)
+		}
+
+		hash2, err := manager.Hash(tok)
+		if err != nil {
+			t.Fatalf("failed to hash token second time: %v", err)
+		}
+
+		if hash1 != hash2 {
+			t.Fatal("hash is not deterministic")
+		}
+	})
+
+	t.Run("different tokens produce different hashes", func(t *testing.T) {
+		tok1, _ := manager.Generate()
+		tok2, _ := manager.Generate()
+
+		hash1, err := manager.Hash(tok1)
+		if err != nil {
+			t.Fatalf("failed to hash first token: %v", err)
+		}
+
+		hash2, err := manager.Hash(tok2)
+		if err != nil {
+			t.Fatalf("failed to hash second token: %v", err)
+		}
+
+		if hash1 == hash2 {
+			t.Fatal("different tokens should produce different hashes")
+		}
+	})
+
+	t.Run("hash is non-empty", func(t *testing.T) {
+		tok, _ := manager.Generate()
 
 		hash, err := manager.Hash(tok)
 		if err != nil {
@@ -51,37 +88,20 @@ func TestHashAndVerify(t *testing.T) {
 		}
 
 		if hash == "" {
-			t.Fatal("generated hash is empty")
+			t.Fatal("hash is empty")
+		}
+	})
+
+	t.Run("hash is different from token", func(t *testing.T) {
+		tok, _ := manager.Generate()
+
+		hash, err := manager.Hash(tok)
+		if err != nil {
+			t.Fatalf("failed to hash token: %v", err)
 		}
 
 		if hash == tok {
 			t.Fatal("hash should not equal original token")
-		}
-
-		err = manager.Verify(tok, hash)
-		if err != nil {
-			t.Fatalf("failed to verify token: %v", err)
-		}
-	})
-
-	t.Run("verify fails with wrong token", func(t *testing.T) {
-		tok, _ := manager.Generate()
-		hash, _ := manager.Hash(tok)
-
-		wrongTok, _ := manager.Generate()
-
-		err := manager.Verify(wrongTok, hash)
-		if err == nil {
-			t.Fatal("expected verification to fail with wrong token")
-		}
-	})
-
-	t.Run("verify fails with invalid hash", func(t *testing.T) {
-		tok, _ := manager.Generate()
-
-		err := manager.Verify(tok, "invalid-hash")
-		if err == nil {
-			t.Fatal("expected verification to fail with invalid hash")
 		}
 	})
 }
