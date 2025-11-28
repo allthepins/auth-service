@@ -13,6 +13,7 @@ import (
 	"github.com/allthepins/auth-service/internal/platform/token"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Common errors returned by the authentication service.
@@ -196,6 +197,11 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*AuthRespo
 			Credentials: preparedCreds,
 		})
 		if err != nil {
+			// Handle concurrent registration race condition.
+			// Multiple requests may pass the pre-check but hit unique constraint in DB
+			if isPgUniqueViolation(err) {
+				return ErrUserExists
+			}
 			return fmt.Errorf("failed to create identity: %w", err)
 		}
 
@@ -203,6 +209,10 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*AuthRespo
 	})
 
 	if err != nil {
+		// Check if it's the user already exists error from transaction
+		if errors.Is(err, ErrUserExists) {
+			return nil, ErrUserExists
+		}
 		s.logger.Error("failed to register user", "error", err, "provider", req.Provider)
 		return nil, err
 	}
@@ -455,4 +465,20 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 
 	s.logger.Info("user logged out successfully")
 	return nil
+}
+
+// isPgUniqueViolation checks if an error is a PostgreSQL unique constraint violation.
+// This is used to detect concurrent registration attempts that pass the pre-check
+// but hit the database unique constraint.
+func isPgUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		// 23505 is PostgreSQL's unique_violation error code
+		return pgErr.Code == "23505"
+	}
+	return false
 }
