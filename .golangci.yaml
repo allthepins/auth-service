@@ -1,0 +1,104 @@
+# golangci-lint config
+# See: https://golangci-lint.run/docs/configuration/file/
+
+version: "2"
+
+run:
+  # Timeout for analysis
+  timeout: 5m
+  
+  # Include test files
+  tests: true
+  
+  # Modules download mode
+  modules-download-mode: readonly
+
+linters:
+  default: standard
+  
+  enable:    
+    # Additional linters
+    - misspell      # Find commonly misspelled English words
+    - revive        # Drop-in replacement for golint
+    - gosec         # Security-focused linter
+    - unconvert     # Remove unnecessary type conversions
+    - goconst       # Find repeated strings that could be constants
+    - gocyclo       # Compute cyclomatic complexity
+    - dupl          # Find duplicated code
+    - bodyclose     # Check HTTP response bodies are closed
+    - noctx         # Find HTTP requests without context
+    - sqlclosecheck # Check SQL rows/statements are closed
+
+  settings:
+    errcheck:
+      # Check type assertions
+      check-type-assertions: true
+      # Check blank assignments
+      check-blank: true
+
+    govet:
+      # Enable all analyzers
+      enable-all: true
+
+    gocyclo:
+      # Maximum cyclomatic complexity
+      min-complexity: 15
+
+    dupl:
+      # Minimum token sequence as duplicate
+      threshold: 100
+
+    goconst:
+      # Minimum occurrences to report
+      min-len: 3
+      min-occurrences: 3
+
+    revive:
+      rules:
+        - name: exported
+          disabled: false
+        - name: package-comments
+          disabled: false
+        - name: var-naming
+          disabled: false
+        - name: unexported-return
+          disabled: false
+
+  exclusions:
+    generated: lax
+    rules:
+      # Exclude some "unexpected-return" messages from test files.
+      - path: _test\.go
+        linters:
+          - revive
+        text:: "unexported-return"
+      # Allow dot imports in tests for testify
+      - path: _test\.go
+        text: "dot imports"
+      # Exclude some linters from running at all in tests.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - dupl
+
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: false
+
+issues:
+  # Maximum issues count per one linter
+  max-issues-per-linter: 0
+  
+  # Maximum count of issues with the same text
+  max-same-issues: 0
+
+  # Show all issues from a linter
+  new: false
+  
+  # Fix found issues (if supported by the linter)
+  fix: false
