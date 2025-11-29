@@ -65,6 +65,10 @@ tidy: ## Tidy the go.mod and go.sum files
 	@echo "Tidying modules..."
 	@go mod tidy
 
+lint: ## Run the golangci-lint linter
+	@echo "Running the golangci-lint linter..."
+	@golangci-lint run
+
 clean: ## Remove the compiled application binary
 	@echo "Cleaning up..."
 	@rm -f auth-service
