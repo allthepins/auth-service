@@ -14,7 +14,7 @@ I wouldn't use this in production, and neither should you.
 
 ## API Documentation
 
-**[View Interactive API Documentation](https://[allthepins].github.io/auth-service/)**
+**[View Interactive API Documentation](https://allthepins.github.io/auth-service/)**
 
 Core authentication endpoints implemented thus far:
 - `POST /auth/register` - Create new user account
