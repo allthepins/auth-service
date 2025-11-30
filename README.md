@@ -12,6 +12,16 @@ I wouldn't use this in production, and neither should you.
 
 ***
 
+## API Documentation
+
+**[View Interactive API Documentation](https://[allthepins].github.io/auth-service/)**
+
+Core authentication endpoints implemented thus far:
+- `POST /auth/register` - Create new user account
+- `POST /auth/login` - Authenticate user  
+- `POST /auth/refresh` - Refresh access token
+- `POST /auth/logout` - Revoke refresh token
+
 ## Getting started
 
 ### Prerequisites
@@ -98,22 +108,23 @@ Run `make help` for a descriptive list of what's available.
 - [x] Add unit tests for the `auth.Service`.
 
 #### API endpoints
-- [ ] Implement public handlers for `/auth/register` and `/auth/login`.
-- [ ] Wire up all components in `main.go`.
-- [ ] Add unit tests for the API handlers.
+- [x] Implement public handlers for `/auth/register` and `/auth/login`.
+- [x] Wire up all components in `main.go`.
+- [x] Add unit tests for the API handlers.
+- [x] Add integration tests for the API handlers.
 
 ### Phase 2: Security & core features
 
 #### Middleware
-- [ ] Implement centralized middleware for request logging.
-- [ ] Implement `Authenticate` middleware for JWT validation.
-- [ ] Implement panic recovery middleware.
+- [x] Implement centralized middleware for request logging. (Used `chi`'s `httplog`')
+- [x] Implement `Authenticate` middleware for JWT validation.
+- [x] Implement panic recovery middleware. (Used `chimiddleware` panic recovery in the `httplog` configuration)
 - [ ] Add unit tests for all middleware.
 
 #### Session lifecycle
-- [ ] Add `refresh_tokens` table migration.
-- [ ] Implement refresh token rotation logic in the `auth.Service`.
-- [ ] Implement the `POST /auth/refresh` and `POST /auth/logout` endpoints.
+- [x] Add `refresh_tokens` table migration.
+- [x] Implement refresh token rotation logic in the `auth.Service`.
+- [x] Implement the `POST /auth/refresh` and `POST /auth/logout` endpoints.
 
 #### Session management
 - [ ] Add `metadata` column to `refresh_tokens` table.
