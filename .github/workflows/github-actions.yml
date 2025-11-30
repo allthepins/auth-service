@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  lint-required:
+    name: Lint (Required)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.5'
+          cache: true
+      - name: golangci-lint (default settings)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          args: --no-config --timeout=5m
+  lint-comprehensive:
+    name: Lint (Comprehensive)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.5'
+          cache: true
+      - name: golangci-lint (with config)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          args: --timeout=5m
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.5'
+          cache: true
+      - name: Run unit tests
+        run: go test -v -short -race ./...
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.5'
+          cache: true
+      - name: Run integration tests
+        run: go test -v -run Integration -race ./...
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [lint-required, unit-tests, integration-tests]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.5'
+          cache: true
+      - name: Build
+        run: go build -v -o ./bin/api ./cmd/api
+      - name: Verify dependencies
+        run: |
+          go mod verify
+          go mod tidy
+          git diff --exit-code go.mod go.sum

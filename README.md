@@ -20,6 +20,7 @@ I wouldn't use this in production, and neither should you.
 * Docker
 * [Goose](https://github.com/pressly/goose)
 * [sqlc](https://sqlc.dev/)
+* [Golangci-lint](https://github.com/golangci/golangci-lint)
 
 ### Local setup
 
@@ -51,6 +52,14 @@ The API service should now be running and accessible at `http://localhost:8080`.
 Run all tests:
 ```sh
 make test
+```
+
+### Running linter
+(Ensure you have golangci-lint installed)
+
+Run linter:
+```sh
+make lint
 ```
 
 ### Database Code generation

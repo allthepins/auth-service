@@ -13,8 +13,6 @@ import (
 
 // tokenLength is the byte length of tokens.
 const tokenLength = 32 // 32 bytes = 256 bits
-// bcryptCost is the number of bcrypt hashing rounds
-const bcryptCost = 11 // 1 more than default cost
 
 // Manager handles secure token generation and verification.
 type Manager interface {
