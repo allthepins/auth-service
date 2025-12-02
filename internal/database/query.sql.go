@@ -50,7 +50,7 @@ func (q *Queries) CreateIdentity(ctx context.Context, arg CreateIdentityParams) 
 const createRefreshToken = `-- name: CreateRefreshToken :one
 INSERT INTO "auth.refresh_tokens" (id, user_id, token_hash, expires_at)
 VALUES ($1, $2, $3, $4)
-RETURNING id, user_id, token_hash, expires_at, revoked_at, created_at
+RETURNING id, user_id, token_hash, expires_at, revoked_at, created_at, last_used_at, metadata
 `
 
 type CreateRefreshTokenParams struct {
@@ -75,6 +75,8 @@ func (q *Queries) CreateRefreshToken(ctx context.Context, arg CreateRefreshToken
 		&i.ExpiresAt,
 		&i.RevokedAt,
 		&i.CreatedAt,
+		&i.LastUsedAt,
+		&i.Metadata,
 	)
 	return i, err
 }
@@ -129,7 +131,7 @@ func (q *Queries) GetIdentityByProvider(ctx context.Context, arg GetIdentityByPr
 }
 
 const getRefreshTokenByHash = `-- name: GetRefreshTokenByHash :one
-SELECT id, user_id, token_hash, expires_at, revoked_at, created_at FROM "auth.refresh_tokens"
+SELECT id, user_id, token_hash, expires_at, revoked_at, created_at, last_used_at, metadata FROM "auth.refresh_tokens"
 WHERE token_hash = $1 AND revoked_at IS NULL
 LIMIT 1
 `
@@ -144,6 +146,8 @@ func (q *Queries) GetRefreshTokenByHash(ctx context.Context, tokenHash string) (
 		&i.ExpiresAt,
 		&i.RevokedAt,
 		&i.CreatedAt,
+		&i.LastUsedAt,
+		&i.Metadata,
 	)
 	return i, err
 }
