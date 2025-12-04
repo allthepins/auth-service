@@ -29,6 +29,7 @@ type JWTConfig struct {
 // AuthConfig holds authentication-related config.
 type AuthConfig struct {
 	RefreshTokenExpiry time.Duration
+	IPCryptKey         string
 }
 
 // Config holds all application config.
@@ -89,6 +90,9 @@ func (c *Config) validate() error {
 	if c.JWT.Secret == "" {
 		return fmt.Errorf("JWT_SECRET is required")
 	}
+	if c.Auth.IPCryptKey == "" {
+		return fmt.Errorf("IPCRYPT_KEY is required")
+	}
 	return nil
 }
 
@@ -111,6 +115,7 @@ func Load() (*Config, error) {
 		},
 		Auth: AuthConfig{
 			RefreshTokenExpiry: getEnvDuration("REFRESH_TOKEN_EXPIRY", 30*24*time.Hour),
+			IPCryptKey:         os.Getenv("IPCRYPT_KEY"),
 		},
 	}
 
