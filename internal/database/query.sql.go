@@ -48,16 +48,18 @@ func (q *Queries) CreateIdentity(ctx context.Context, arg CreateIdentityParams) 
 }
 
 const createRefreshToken = `-- name: CreateRefreshToken :one
-INSERT INTO "auth.refresh_tokens" (id, user_id, token_hash, expires_at)
-VALUES ($1, $2, $3, $4)
+INSERT INTO "auth.refresh_tokens" (id, user_id, token_hash, expires_at, last_used_at, metadata)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id, user_id, token_hash, expires_at, revoked_at, created_at, last_used_at, metadata
 `
 
 type CreateRefreshTokenParams struct {
-	ID        uuid.UUID `json:"id"`
-	UserID    uuid.UUID `json:"user_id"`
-	TokenHash string    `json:"token_hash"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ID         uuid.UUID  `json:"id"`
+	UserID     uuid.UUID  `json:"user_id"`
+	TokenHash  string     `json:"token_hash"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	LastUsedAt *time.Time `json:"last_used_at"`
+	Metadata   []byte     `json:"metadata"`
 }
 
 func (q *Queries) CreateRefreshToken(ctx context.Context, arg CreateRefreshTokenParams) (AuthRefreshToken, error) {
@@ -66,6 +68,8 @@ func (q *Queries) CreateRefreshToken(ctx context.Context, arg CreateRefreshToken
 		arg.UserID,
 		arg.TokenHash,
 		arg.ExpiresAt,
+		arg.LastUsedAt,
+		arg.Metadata,
 	)
 	var i AuthRefreshToken
 	err := row.Scan(
