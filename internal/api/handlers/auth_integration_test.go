@@ -3,6 +3,7 @@ package handlers_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,12 +13,16 @@ import (
 	"time"
 
 	"github.com/allthepins/auth-service/internal/api/handlers"
+	"github.com/allthepins/auth-service/internal/api/middleware"
 	"github.com/allthepins/auth-service/internal/auth"
 	"github.com/allthepins/auth-service/internal/database"
+	"github.com/allthepins/auth-service/internal/platform/ipcrypt"
 	"github.com/allthepins/auth-service/internal/platform/jwt"
 	"github.com/allthepins/auth-service/internal/platform/logger"
 	"github.com/allthepins/auth-service/internal/platform/token"
+	"github.com/allthepins/auth-service/internal/testhelpers"
 	"github.com/go-chi/chi/v5"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
@@ -66,7 +71,7 @@ func TestAuthHandlerIntegration(t *testing.T) {
 
 	// Run migrations
 	t.Log("Running migrations...")
-	require.NoError(t, runMigrations(t, ctx, connString))
+	require.NoError(t, testhelpers.RunGooseMigrations(t, connString))
 
 	// Connect to database
 	dbPool, err := pgxpool.New(ctx, connString)
@@ -91,65 +96,6 @@ func TestAuthHandlerIntegration(t *testing.T) {
 	})
 }
 
-// runMigrations runs database migrations inline.
-// TODO Look into alternative to inline if queries grow.
-func runMigrations(t *testing.T, ctx context.Context, connString string) error {
-	t.Helper()
-
-	conn, err := pgx.Connect(ctx, connString)
-	if err != nil {
-		return fmt.Errorf("failed to connect: %w", err)
-	}
-	defer func() {
-		if err := conn.Close(ctx); err != nil {
-			t.Logf("WARNING: failed to close migration connection: %v", err)
-		}
-	}()
-
-	// Run migrations
-	migrations := []string{
-		`CREATE TABLE IF NOT EXISTS "auth.users" (
-			id UUID PRIMARY KEY,
-			roles TEXT[] NOT NULL DEFAULT '{}',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`,
-		`CREATE TABLE IF NOT EXISTS "auth.identities" (
-			id UUID PRIMARY KEY,
-			user_id UUID NOT NULL REFERENCES "auth.users"(id) ON DELETE CASCADE,
-			provider TEXT NOT NULL,
-			provider_id TEXT NOT NULL,
-			credentials JSONB,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			UNIQUE(provider, provider_id)
-		)`,
-		`CREATE TABLE IF NOT EXISTS "auth.refresh_tokens" (
-			id UUID PRIMARY KEY,
-			user_id UUID NOT NULL REFERENCES "auth.users"(id) ON DELETE CASCADE,
-			token_hash TEXT NOT NULL,
-			expires_at TIMESTAMPTZ NOT NULL,
-			revoked_at TIMESTAMPTZ,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			UNIQUE(token_hash)
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_active
-		 ON "auth.refresh_tokens"(user_id)
-		 WHERE revoked_at IS NULL`,
-		`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash
-		 ON "auth.refresh_tokens"(token_hash)
-		 WHERE revoked_at IS NULL`,
-	}
-
-	for _, migration := range migrations {
-		if _, err := conn.Exec(ctx, migration); err != nil {
-			return fmt.Errorf("migration failed: %w", err)
-		}
-	}
-
-	return nil
-}
-
 // setupAuthService creates auth service with real dependencies.
 func setupAuthService(t *testing.T, pool *pgxpool.Pool) *auth.Service {
 	t.Helper()
@@ -163,6 +109,11 @@ func setupAuthService(t *testing.T, pool *pgxpool.Pool) *auth.Service {
 	require.NoError(t, err)
 
 	tokenManager := token.New()
+
+	testKey := base64.StdEncoding.EncodeToString(make([]byte, 16))
+	ipEncryptor, err := ipcrypt.New(testKey)
+	require.NoError(t, err)
+
 	queries := &queryAdapter{database.New(pool)}
 	log := logger.New("test-service")
 
@@ -171,6 +122,7 @@ func setupAuthService(t *testing.T, pool *pgxpool.Pool) *auth.Service {
 		Querier:            queries,
 		JWT:                jwtAuth,
 		TokenManager:       tokenManager,
+		IPCrypt:            ipEncryptor,
 		Logger:             log,
 		RefreshTokenExpiry: 30 * 24 * time.Hour,
 	})
@@ -191,6 +143,9 @@ func (qa *queryAdapter) WithTx(tx pgx.Tx) database.Querier {
 // setupRouter creates a chi router with all routes.
 func setupRouter(handler *handlers.AuthHandler) *chi.Mux {
 	r := chi.NewRouter()
+
+	r.Use(chimiddleware.RealIP)
+	r.Use(middleware.ExtractRequestMetadata)
 
 	r.Post("/auth/register", handler.Register)
 	r.Post("/auth/login", handler.Login)

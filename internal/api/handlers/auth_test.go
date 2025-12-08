@@ -53,6 +53,19 @@ func (m *mockAuthService) Logout(ctx context.Context, refreshToken string) error
 	return args.Error(0)
 }
 
+func (m *mockAuthService) ListUserSessions(ctx context.Context, userID string) ([]auth.Session, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]auth.Session), args.Error(1)
+}
+
+func (m *mockAuthService) RevokeSession(ctx context.Context, userID, sessionID string) error {
+	args := m.Called(ctx, userID, sessionID)
+	return args.Error(0)
+}
+
 func TestAuthHandler_Register(t *testing.T) {
 	tests := []struct {
 		name          string
