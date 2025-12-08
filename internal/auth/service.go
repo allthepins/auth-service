@@ -3,12 +3,16 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
+	"github.com/allthepins/auth-service/internal/api/middleware"
 	"github.com/allthepins/auth-service/internal/database"
+	"github.com/allthepins/auth-service/internal/platform/ipcrypt"
 	"github.com/allthepins/auth-service/internal/platform/jwt"
 	"github.com/allthepins/auth-service/internal/platform/token"
 	"github.com/google/uuid"
@@ -24,6 +28,7 @@ var (
 	ErrInvalidProvider    = errors.New("invalid provider")
 	ErrInvalidInput       = errors.New("invalid input")
 	ErrInvalidToken       = errors.New("invalid or expired token")
+	ErrSessionNotFound    = errors.New("session not found")
 )
 
 // TxBeginner defines an interface for starting a database transaction.
@@ -46,6 +51,7 @@ type Service struct {
 	querier            Querier
 	jwt                jwt.Auth
 	tokenManager       token.Manager
+	ipCrypt            ipcrypt.Encryptor
 	logger             *slog.Logger
 	providers          map[string]Provider
 	refreshTokenExpiry time.Duration
@@ -57,6 +63,7 @@ type Config struct {
 	Querier            Querier
 	JWT                jwt.Auth
 	TokenManager       token.Manager
+	IPCrypt            ipcrypt.Encryptor
 	Logger             *slog.Logger
 	RefreshTokenExpiry time.Duration
 }
@@ -74,6 +81,9 @@ func (c Config) Validate() error {
 	}
 	if c.TokenManager == nil {
 		return errors.New("token manager is required")
+	}
+	if c.IPCrypt == nil {
+		return errors.New("IP encryptor is required")
 	}
 	if c.Logger == nil {
 		return errors.New("logger is required")
@@ -95,6 +105,7 @@ func NewService(c Config) (*Service, error) {
 		querier:            c.Querier,
 		jwt:                c.JWT,
 		tokenManager:       c.TokenManager,
+		ipCrypt:            c.IPCrypt,
 		logger:             c.Logger,
 		providers:          make(map[string]Provider),
 		refreshTokenExpiry: c.RefreshTokenExpiry,
@@ -134,6 +145,20 @@ type AuthResponse struct {
 	AccessToken  string `json:"accessToken"`
 	RefreshToken string `json:"refreshToken"`
 	User         User   `json:"user"`
+}
+
+// Session represents a user session.
+type Session struct {
+	ID           string    `json:"id"`
+	ClientIP     string    `json:"clientIp"`
+	SessionStart time.Time `json:"sessionStart"`
+	LastUsedAt   time.Time `json:"lastUsedAt"`
+	ExpiresAt    time.Time `json:"expiresAt"`
+}
+
+// getRequestMetadata is helper to extract request metadata from context.
+func getRequestMetadata(ctx context.Context) *middleware.RequestMetadata {
+	return middleware.GetRequestMetadata(ctx)
 }
 
 // Register creates a new user account with the specified provider and credentials.
@@ -231,7 +256,7 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*AuthRespo
 
 	// TODO Look into if it's better practice to include refresh token creation in
 	// the 'register' transaction, as refresh token generation failure is a data integrity issue.
-	refreshToken, err := s.createRefreshToken(ctx, user.ID)
+	refreshToken, err := s.createRefreshToken(ctx, user.ID, nil)
 	if err != nil {
 		s.logger.Error("failed to create refresh token", "error", err)
 		return nil, err
@@ -299,7 +324,7 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*AuthResponse, e
 		return nil, err
 	}
 
-	refreshToken, err := s.createRefreshToken(ctx, user.ID)
+	refreshToken, err := s.createRefreshToken(ctx, user.ID, nil)
 	if err != nil {
 		s.logger.Error("failed to create refresh token", "error", err)
 		return nil, err
@@ -360,7 +385,9 @@ func (s *Service) withTx(ctx context.Context, fn func(database.Querier) error) e
 }
 
 // createRefreshToken generates and stores a new refresh token for the user.
-func (s *Service) createRefreshToken(ctx context.Context, userID uuid.UUID) (string, error) {
+func (s *Service) createRefreshToken(ctx context.Context, userID uuid.UUID, sessionStartTime *time.Time) (string, error) {
+	metadata := getRequestMetadata(ctx)
+
 	refreshToken, err := s.tokenManager.Generate()
 	if err != nil {
 		return "", fmt.Errorf("failed to generate refresh token: %w", err)
@@ -373,11 +400,35 @@ func (s *Service) createRefreshToken(ctx context.Context, userID uuid.UUID) (str
 
 	expiresAt := time.Now().Add(s.refreshTokenExpiry)
 
+	encryptedIP, err := s.ipCrypt.Encrypt(metadata.ClientIP)
+	if err != nil {
+		return "", fmt.Errorf("failed to encrypt IP: %w", err)
+	}
+
+	var sessionStart time.Time
+	if sessionStartTime != nil {
+		sessionStart = *sessionStartTime
+	} else {
+		sessionStart = time.Now()
+	}
+
+	metadataJSON := map[string]any{
+		"encrypted_ip":       encryptedIP,
+		"session_start_time": sessionStart.Format(time.RFC3339),
+	}
+
+	metadataBytes, err := json.Marshal(metadataJSON)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal metadata: %w", err)
+	}
+
 	_, err = s.querier.CreateRefreshToken(ctx, database.CreateRefreshTokenParams{
-		ID:        uuid.New(),
-		UserID:    userID,
-		TokenHash: tokenHash,
-		ExpiresAt: expiresAt,
+		ID:         uuid.New(),
+		UserID:     userID,
+		TokenHash:  tokenHash,
+		ExpiresAt:  expiresAt,
+		Metadata:   metadataBytes,
+		LastUsedAt: &sessionStart,
 	})
 
 	if err != nil {
@@ -411,6 +462,19 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthRespon
 		return nil, ErrInvalidToken
 	}
 
+	// Extract session start time from old token metadata
+	var sessionStartTime *time.Time
+	if len(storedToken.Metadata) > 0 {
+		var oldMetadata map[string]any
+		if err := json.Unmarshal(storedToken.Metadata, &oldMetadata); err == nil {
+			if startTimeStr, ok := oldMetadata["session_start_time"].(string); ok {
+				if parsedTime, err := time.Parse(time.RFC3339, startTimeStr); err == nil {
+					sessionStartTime = &parsedTime
+				}
+			}
+		}
+	}
+
 	// Revoke the old token
 	if err := s.querier.RevokeRefreshToken(ctx, tokenHash); err != nil {
 		s.logger.Error("failed to revoke old refresh token", "error", err)
@@ -430,7 +494,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthRespon
 		return nil, err
 	}
 
-	newRefreshToken, err := s.createRefreshToken(ctx, user.ID)
+	newRefreshToken, err := s.createRefreshToken(ctx, user.ID, sessionStartTime)
 	if err != nil {
 		s.logger.Error("failed to create new refresh token", "error", err)
 		return nil, err
@@ -467,6 +531,96 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 	return nil
 }
 
+// ListUserSessions returns all active sessions for a user.
+func (s *Service) ListUserSessions(ctx context.Context, userID string) ([]Session, error) {
+	uid, err := uuid.Parse(userID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid user ID: %w", err)
+	}
+
+	// Get all active refresh tokens for the user
+	tokens, err := s.querier.ListUserRefreshTokens(ctx, uid)
+	if err != nil {
+		s.logger.Error("failed to list user refresh tokens", "error", err, "user_id", userID)
+		return nil, err
+	}
+
+	sessions := make([]Session, 0, len(tokens))
+	for _, token := range tokens {
+		// Parse metadata
+		var metadata map[string]any
+		var encryptedIP, sessionStartStr string
+
+		if len(token.Metadata) > 0 {
+			if err := json.Unmarshal(token.Metadata, &metadata); err == nil {
+				if ip, ok := metadata["encrypted_ip"].(string); ok {
+					encryptedIP = ip
+				}
+				if start, ok := metadata["session_start_time"].(string); ok {
+					sessionStartStr = start
+				}
+			}
+		}
+
+		// Decrypt IP
+		decryptedIP := "unknown"
+		if encryptedIP != "" {
+			if ip, err := s.ipCrypt.Decrypt(encryptedIP); err == nil {
+				decryptedIP = maskIP(ip)
+			}
+		}
+
+		// Parse session start time
+		var sessionStart time.Time
+		if sessionStartStr != "" {
+			if parsed, err := time.Parse(time.RFC3339, sessionStartStr); err == nil {
+				sessionStart = parsed
+			}
+		}
+
+		// Use LastUsedAt if available, else CreatedAt
+		lastUsed := token.CreatedAt
+		if token.LastUsedAt != nil {
+			lastUsed = *token.LastUsedAt
+		}
+
+		sessions = append(sessions, Session{
+			ID:           token.ID.String(),
+			ClientIP:     decryptedIP,
+			LastUsedAt:   lastUsed,
+			SessionStart: sessionStart,
+			ExpiresAt:    token.ExpiresAt,
+		})
+	}
+
+	return sessions, nil
+}
+
+// RevokeSession revokes a specific session by its ID.
+func (s *Service) RevokeSession(ctx context.Context, userID, sessionID string) error {
+	uid, err := uuid.Parse(userID)
+	if err != nil {
+		return fmt.Errorf("invalid user ID: %w", err)
+	}
+
+	sid, err := uuid.Parse(sessionID)
+	if err != nil {
+		return fmt.Errorf("invalid session ID: %w", err)
+	}
+
+	err = s.querier.RevokeUserSession(ctx, database.RevokeUserSessionParams{
+		ID:     sid,
+		UserID: uid,
+	})
+	if err != nil {
+		s.logger.Error("failed to revoke session", "error", err, "session_id", sessionID)
+		return err
+	}
+
+	s.logger.Info("session revoked", "user_id", userID, "session_id", sessionID)
+	return nil
+}
+
 // isPgUniqueViolation checks if an error is a PostgreSQL unique constraint violation.
 // This is used to detect concurrent registration attempts that pass the pre-check
 // but hit the database unique constraint.
@@ -481,4 +635,21 @@ func isPgUniqueViolation(err error) bool {
 		return pgErr.Code == "23505"
 	}
 	return false
+}
+
+// maskIP is a helper that masks a given IP.
+// For IPv4 is shows the first 3 octects and masks the last one.
+// For IPv6 it shows the first 4 groups and masks the rest.
+func maskIP(ip string) string {
+	parts := strings.Split(ip, ".")
+	if len(parts) == 4 {
+		return fmt.Sprintf("%s.%s.%s.*", parts[0], parts[1], parts[2])
+	}
+
+	parts = strings.Split(ip, ":")
+	if len(parts) >= 4 {
+		return fmt.Sprintf("%s:%s:%s:%s:*:*:*:*", parts[0], parts[1], parts[2], parts[3])
+	}
+
+	return "***"
 }

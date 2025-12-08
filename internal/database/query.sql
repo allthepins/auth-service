@@ -37,3 +37,13 @@ where token_hash = $1;
 UPDATE "auth.refresh_tokens"
 SET revoked_at = NOW()
 WHERE user_id = $1 AND revoked_at IS NULL;
+
+-- name: ListUserRefreshTokens :many
+SELECT * FROM "auth.refresh_tokens"
+WHERE user_id = $1 AND revoked_at IS NULL
+ORDER BY last_used_at DESC;
+
+-- name: RevokeUserSession :exec
+UPDATE "auth.refresh_tokens"
+SET revoked_at = NOW()
+WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL;

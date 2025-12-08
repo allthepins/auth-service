@@ -17,8 +17,10 @@ type Querier interface {
 	GetIdentityByProvider(ctx context.Context, arg GetIdentityByProviderParams) (AuthIdentity, error)
 	GetRefreshTokenByHash(ctx context.Context, tokenHash string) (AuthRefreshToken, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (AuthUser, error)
+	ListUserRefreshTokens(ctx context.Context, userID uuid.UUID) ([]AuthRefreshToken, error)
 	RevokeAllUserRefreshTokens(ctx context.Context, userID uuid.UUID) error
 	RevokeRefreshToken(ctx context.Context, tokenHash string) error
+	RevokeUserSession(ctx context.Context, arg RevokeUserSessionParams) error
 }
 
 var _ Querier = (*Queries)(nil)
