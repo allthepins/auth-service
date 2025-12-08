@@ -2,11 +2,13 @@ package auth_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"testing"
 	"time"
 
+	"github.com/allthepins/auth-service/internal/api/middleware"
 	"github.com/allthepins/auth-service/internal/auth"
 	"github.com/allthepins/auth-service/internal/database"
 	"github.com/google/uuid"
@@ -16,6 +18,12 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+// contextWithMetadata creates a context with request metadata for testing.
+func contextWithMetadata(clientIP string) context.Context {
+	metadata := &middleware.RequestMetadata{ClientIP: clientIP}
+	return context.WithValue(context.Background(), middleware.RequestMetadataKey, metadata)
+}
 
 // mockTxBeginner mocks the transaction beginner interface
 type mockTxBeginner struct {
@@ -113,6 +121,16 @@ func (m *mockQuerier) RevokeAllUserRefreshTokens(ctx context.Context, userID uui
 	return args.Error(0)
 }
 
+func (m *mockQuerier) ListUserRefreshTokens(ctx context.Context, userID uuid.UUID) ([]database.AuthRefreshToken, error) {
+	args := m.Called(ctx, userID)
+	return args.Get(0).([]database.AuthRefreshToken), args.Error(1)
+}
+
+func (m *mockQuerier) RevokeUserSession(ctx context.Context, arg database.RevokeUserSessionParams) error {
+	args := m.Called(ctx, arg)
+	return args.Error(0)
+}
+
 // mockJWT mocks JWT operations
 type mockJWT struct {
 	mock.Mock
@@ -143,12 +161,28 @@ func (m *mockTokenManager) Hash(token string) (string, error) {
 	return args.String(0), args.Error(1)
 }
 
+// mockIPCrypt mocks IP encryption operations
+type mockIPCrypt struct {
+	mock.Mock
+}
+
+func (m *mockIPCrypt) Encrypt(ip string) (string, error) {
+	args := m.Called(ip)
+	return args.String(0), args.Error(1)
+}
+
+func (m *mockIPCrypt) Decrypt(encrypted string) (string, error) {
+	args := m.Called(encrypted)
+	return args.String(0), args.Error(1)
+}
+
 func TestNewService(t *testing.T) {
 	t.Run("successful creation", func(t *testing.T) {
 		conn := &mockTxBeginner{}
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
@@ -156,6 +190,7 @@ func TestNewService(t *testing.T) {
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -168,12 +203,14 @@ func TestNewService(t *testing.T) {
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -187,12 +224,14 @@ func TestNewService(t *testing.T) {
 		conn := &mockTxBeginner{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
 			Conn:               conn,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -206,12 +245,14 @@ func TestNewService(t *testing.T) {
 		conn := &mockTxBeginner{}
 		querier := &mockQuerier{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
 			Conn:               conn,
 			Querier:            querier,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -226,12 +267,14 @@ func TestNewService(t *testing.T) {
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 
 		service, err := auth.NewService(auth.Config{
 			Conn:               conn,
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
 
@@ -244,12 +287,14 @@ func TestNewService(t *testing.T) {
 		conn := &mockTxBeginner{}
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
 			Conn:               conn,
 			Querier:            querier,
 			JWT:                jwtMock,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -259,7 +304,7 @@ func TestNewService(t *testing.T) {
 		assert.Contains(t, err.Error(), "token manager is required")
 	})
 
-	t.Run("missing refresh token expiry", func(t *testing.T) {
+	t.Run("missing IP encryptor", func(t *testing.T) {
 		conn := &mockTxBeginner{}
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
@@ -267,10 +312,33 @@ func TestNewService(t *testing.T) {
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
+			Conn:               conn,
+			Querier:            querier,
+			JWT:                jwtMock,
+			TokenManager:       tokenMgr,
+			Logger:             logger,
+			RefreshTokenExpiry: 30 * 24 * time.Hour,
+		})
+
+		require.Error(t, err)
+		assert.Nil(t, service)
+		assert.Contains(t, err.Error(), "IP encryptor is required")
+	})
+
+	t.Run("missing refresh token expiry", func(t *testing.T) {
+		conn := &mockTxBeginner{}
+		querier := &mockQuerier{}
+		jwtMock := &mockJWT{}
+		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
+		logger := slog.Default()
+
+		service, err := auth.NewService(auth.Config{
 			Conn:         conn,
 			Querier:      querier,
 			JWT:          jwtMock,
 			TokenManager: tokenMgr,
+			IPCrypt:      ipCrypt,
 			Logger:       logger,
 		})
 
@@ -281,15 +349,16 @@ func TestNewService(t *testing.T) {
 }
 
 func TestService_Register(t *testing.T) {
-	ctx := context.Background()
-
 	t.Run("successful registration", func(t *testing.T) {
+		ctx := contextWithMetadata("192.168.1.100")
+
 		conn := &mockTxBeginner{}
 		querier := &mockQuerier{}
 		txQuerier := &mockQuerier{}
 		tx := &mockTx{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
@@ -297,6 +366,7 @@ func TestService_Register(t *testing.T) {
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -342,6 +412,9 @@ func TestService_Register(t *testing.T) {
 		// Mock: JWT generation
 		jwtMock.On("GenerateToken", userID.String()).Return("test-token", nil)
 
+		// Mock: IP encryption
+		ipCrypt.On("Encrypt", "192.168.1.100").Return("encrypted-ip", nil)
+
 		// Mock: Generate refresh token
 		tokenMgr.On("Generate").Return("mock-refresh-token", nil)
 
@@ -371,11 +444,9 @@ func TestService_Register(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, resp)
 		assert.Equal(t, "test-token", resp.AccessToken)
-		assert.Equal(t, userID.String(), resp.User.ID)
-		assert.Equal(t, []string{"user"}, resp.User.Roles)
-		assert.Equal(t, "test-token", resp.AccessToken)
 		assert.Equal(t, "mock-refresh-token", resp.RefreshToken)
 		assert.Equal(t, userID.String(), resp.User.ID)
+		assert.Equal(t, []string{"user"}, resp.User.Roles)
 
 		conn.AssertExpectations(t)
 		querier.AssertExpectations(t)
@@ -383,15 +454,19 @@ func TestService_Register(t *testing.T) {
 		tx.AssertExpectations(t)
 		jwtMock.AssertExpectations(t)
 		tokenMgr.AssertExpectations(t)
+		ipCrypt.AssertExpectations(t)
 	})
 
 	t.Run("assigns default user role", func(t *testing.T) {
+		ctx := contextWithMetadata("192.168.1.100")
+
 		conn := &mockTxBeginner{}
 		querier := &mockQuerier{}
 		txQuerier := &mockQuerier{}
 		tx := &mockTx{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
@@ -399,6 +474,7 @@ func TestService_Register(t *testing.T) {
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -416,7 +492,6 @@ func TestService_Register(t *testing.T) {
 
 		// Verify that CreateUser is called with exactly ["user"]
 		txQuerier.On("CreateUser", ctx, mock.MatchedBy(func(arg database.CreateUserParams) bool {
-			// Ensure roles is exactly ["user"], no more, no less
 			if len(arg.Roles) != 1 {
 				return false
 			}
@@ -427,6 +502,7 @@ func TestService_Register(t *testing.T) {
 		tx.On("Commit", ctx).Return(nil)
 		jwtMock.On("GenerateToken", userID.String()).Return("test-token", nil)
 
+		ipCrypt.On("Encrypt", "192.168.1.100").Return("encrypted-ip", nil)
 		tokenMgr.On("Generate").Return("mock-refresh-token", nil)
 		tokenMgr.On("Hash", "mock-refresh-token").Return("mock-refresh-hash", nil)
 		querier.On("CreateRefreshToken", ctx, mock.Anything).Return(database.AuthRefreshToken{}, nil)
@@ -448,10 +524,13 @@ func TestService_Register(t *testing.T) {
 	})
 
 	t.Run("user already exists", func(t *testing.T) {
+		ctx := context.Background()
+
 		conn := &mockTxBeginner{}
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
@@ -459,6 +538,7 @@ func TestService_Register(t *testing.T) {
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -494,10 +574,13 @@ func TestService_Register(t *testing.T) {
 	})
 
 	t.Run("invalid provider", func(t *testing.T) {
+		ctx := context.Background()
+
 		conn := &mockTxBeginner{}
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
@@ -505,6 +588,7 @@ func TestService_Register(t *testing.T) {
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -525,10 +609,13 @@ func TestService_Register(t *testing.T) {
 	})
 
 	t.Run("invalid credentials", func(t *testing.T) {
+		ctx := context.Background()
+
 		conn := &mockTxBeginner{}
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
@@ -536,6 +623,7 @@ func TestService_Register(t *testing.T) {
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -558,13 +646,14 @@ func TestService_Register(t *testing.T) {
 }
 
 func TestService_Login(t *testing.T) {
-	ctx := context.Background()
-
 	t.Run("invalid provider", func(t *testing.T) {
+		ctx := context.Background()
+
 		conn := &mockTxBeginner{}
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
@@ -572,6 +661,7 @@ func TestService_Login(t *testing.T) {
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -592,10 +682,13 @@ func TestService_Login(t *testing.T) {
 	})
 
 	t.Run("user not found", func(t *testing.T) {
+		ctx := context.Background()
+
 		conn := &mockTxBeginner{}
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
@@ -603,6 +696,7 @@ func TestService_Login(t *testing.T) {
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -639,6 +733,7 @@ func TestService_GetUserByID(t *testing.T) {
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
@@ -646,6 +741,7 @@ func TestService_GetUserByID(t *testing.T) {
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -674,6 +770,7 @@ func TestService_GetUserByID(t *testing.T) {
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
@@ -681,6 +778,7 @@ func TestService_GetUserByID(t *testing.T) {
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -704,6 +802,7 @@ func TestService_GetUserByID(t *testing.T) {
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
@@ -711,6 +810,7 @@ func TestService_GetUserByID(t *testing.T) {
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -725,13 +825,14 @@ func TestService_GetUserByID(t *testing.T) {
 }
 
 func TestService_Refresh(t *testing.T) {
-	ctx := context.Background()
-
 	t.Run("successful token refresh", func(t *testing.T) {
+		ctx := contextWithMetadata("192.168.1.100")
+
 		conn := &mockTxBeginner{}
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
@@ -739,6 +840,7 @@ func TestService_Refresh(t *testing.T) {
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -751,11 +853,21 @@ func TestService_Refresh(t *testing.T) {
 		}
 
 		oldTokenHash := "old-token-hash"
+		sessionStartTime := time.Now().Add(-24 * time.Hour)
+
+		// Create metadata with session_start_time
+		metadata := map[string]any{
+			"encrypted_ip":       "old-encrypted-ip",
+			"session_start_time": sessionStartTime.Format(time.RFC3339),
+		}
+		metadataBytes, _ := json.Marshal(metadata)
+
 		storedToken := database.AuthRefreshToken{
 			ID:        uuid.New(),
 			UserID:    userID,
 			TokenHash: oldTokenHash,
 			ExpiresAt: time.Now().Add(24 * time.Hour),
+			Metadata:  metadataBytes,
 		}
 
 		// Mock: Hash the provided token
@@ -773,6 +885,9 @@ func TestService_Refresh(t *testing.T) {
 		// Mock: Generate new access token
 		jwtMock.On("GenerateToken", userID.String()).Return("new-access-token", nil)
 
+		// Mock: IP encryption for new token
+		ipCrypt.On("Encrypt", "192.168.1.100").Return("new-encrypted-ip", nil)
+
 		// Mock: Generate new refresh token
 		tokenMgr.On("Generate").Return("new-refresh-token", nil)
 		tokenMgr.On("Hash", "new-refresh-token").Return("new-token-hash", nil)
@@ -789,13 +904,17 @@ func TestService_Refresh(t *testing.T) {
 		querier.AssertExpectations(t)
 		tokenMgr.AssertExpectations(t)
 		jwtMock.AssertExpectations(t)
+		ipCrypt.AssertExpectations(t)
 	})
 
 	t.Run("invalid refresh token", func(t *testing.T) {
+		ctx := context.Background()
+
 		conn := &mockTxBeginner{}
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
@@ -803,6 +922,7 @@ func TestService_Refresh(t *testing.T) {
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -822,10 +942,13 @@ func TestService_Refresh(t *testing.T) {
 	})
 
 	t.Run("expired refresh token", func(t *testing.T) {
+		ctx := context.Background()
+
 		conn := &mockTxBeginner{}
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
@@ -833,6 +956,7 @@ func TestService_Refresh(t *testing.T) {
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -869,6 +993,7 @@ func TestService_Logout(t *testing.T) {
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
@@ -876,6 +1001,7 @@ func TestService_Logout(t *testing.T) {
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -899,6 +1025,7 @@ func TestService_Logout(t *testing.T) {
 		querier := &mockQuerier{}
 		jwtMock := &mockJWT{}
 		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
 		logger := slog.Default()
 
 		service, err := auth.NewService(auth.Config{
@@ -906,6 +1033,7 @@ func TestService_Logout(t *testing.T) {
 			Querier:            querier,
 			JWT:                jwtMock,
 			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
 			Logger:             logger,
 			RefreshTokenExpiry: 30 * 24 * time.Hour,
 		})
@@ -919,5 +1047,239 @@ func TestService_Logout(t *testing.T) {
 		assert.Equal(t, auth.ErrInvalidToken, err)
 
 		tokenMgr.AssertExpectations(t)
+	})
+}
+
+func TestService_ListUserSessions(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("successful list with multiple sessions", func(t *testing.T) {
+		conn := &mockTxBeginner{}
+		querier := &mockQuerier{}
+		jwtMock := &mockJWT{}
+		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
+		logger := slog.Default()
+
+		service, err := auth.NewService(auth.Config{
+			Conn:               conn,
+			Querier:            querier,
+			JWT:                jwtMock,
+			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
+			Logger:             logger,
+			RefreshTokenExpiry: 30 * 24 * time.Hour,
+		})
+		require.NoError(t, err)
+
+		userID := uuid.New()
+		// truncate so second precision since RFC3339 doesn't preserve nanoseconds
+		now := time.Now().UTC().Truncate(time.Second)
+		sessionStart := now.Add(-48 * time.Hour).Truncate(time.Second)
+
+		// Create metadata for tokens
+		metadata1 := map[string]any{
+			"encrypted_ip":       "encrypted-ip-1",
+			"session_start_time": sessionStart.Format(time.RFC3339),
+		}
+		metadata1Bytes, _ := json.Marshal(metadata1)
+
+		metadata2 := map[string]any{
+			"encrypted_ip":       "encrypted-ip-2",
+			"session_start_time": sessionStart.Add(1 * time.Hour).Format(time.RFC3339),
+		}
+		metadata2Bytes, _ := json.Marshal(metadata2)
+
+		tokens := []database.AuthRefreshToken{
+			{
+				ID:         uuid.New(),
+				UserID:     userID,
+				TokenHash:  "hash1",
+				ExpiresAt:  now.Add(24 * time.Hour),
+				Metadata:   metadata1Bytes,
+				LastUsedAt: &now,
+				CreatedAt:  sessionStart,
+			},
+			{
+				ID:         uuid.New(),
+				UserID:     userID,
+				TokenHash:  "hash2",
+				ExpiresAt:  now.Add(48 * time.Hour),
+				Metadata:   metadata2Bytes,
+				LastUsedAt: &now,
+				CreatedAt:  sessionStart.Add(1 * time.Hour),
+			},
+		}
+
+		querier.On("ListUserRefreshTokens", ctx, userID).Return(tokens, nil)
+		ipCrypt.On("Decrypt", "encrypted-ip-1").Return("192.168.1.100", nil)
+		ipCrypt.On("Decrypt", "encrypted-ip-2").Return("10.0.0.50", nil)
+
+		sessions, err := service.ListUserSessions(ctx, userID.String())
+
+		require.NoError(t, err)
+		assert.Len(t, sessions, 2)
+
+		// Check first session
+		assert.Equal(t, tokens[0].ID.String(), sessions[0].ID)
+		assert.Equal(t, "192.168.1.*", sessions[0].ClientIP) // Masked
+		assert.Equal(t, now, sessions[0].LastUsedAt)
+		assert.Equal(t, sessionStart, sessions[0].SessionStart)
+		assert.Equal(t, tokens[0].ExpiresAt, sessions[0].ExpiresAt)
+
+		// Check second session
+		assert.Equal(t, tokens[1].ID.String(), sessions[1].ID)
+		assert.Equal(t, "10.0.0.*", sessions[1].ClientIP) // Masked
+
+		querier.AssertExpectations(t)
+		ipCrypt.AssertExpectations(t)
+	})
+
+	t.Run("no active sessions", func(t *testing.T) {
+		conn := &mockTxBeginner{}
+		querier := &mockQuerier{}
+		jwtMock := &mockJWT{}
+		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
+		logger := slog.Default()
+
+		service, err := auth.NewService(auth.Config{
+			Conn:               conn,
+			Querier:            querier,
+			JWT:                jwtMock,
+			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
+			Logger:             logger,
+			RefreshTokenExpiry: 30 * 24 * time.Hour,
+		})
+		require.NoError(t, err)
+
+		userID := uuid.New()
+
+		querier.On("ListUserRefreshTokens", ctx, userID).Return([]database.AuthRefreshToken{}, nil)
+
+		sessions, err := service.ListUserSessions(ctx, userID.String())
+
+		require.NoError(t, err)
+		assert.Empty(t, sessions)
+
+		querier.AssertExpectations(t)
+	})
+
+	t.Run("invalid user ID", func(t *testing.T) {
+		conn := &mockTxBeginner{}
+		querier := &mockQuerier{}
+		jwtMock := &mockJWT{}
+		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
+		logger := slog.Default()
+
+		service, err := auth.NewService(auth.Config{
+			Conn:               conn,
+			Querier:            querier,
+			JWT:                jwtMock,
+			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
+			Logger:             logger,
+			RefreshTokenExpiry: 30 * 24 * time.Hour,
+		})
+		require.NoError(t, err)
+
+		sessions, err := service.ListUserSessions(ctx, "invalid-uuid")
+
+		require.Error(t, err)
+		assert.Nil(t, sessions)
+		assert.Contains(t, err.Error(), "invalid user ID")
+	})
+}
+
+func TestService_RevokeSession(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("successful revocation", func(t *testing.T) {
+		conn := &mockTxBeginner{}
+		querier := &mockQuerier{}
+		jwtMock := &mockJWT{}
+		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
+		logger := slog.Default()
+
+		service, err := auth.NewService(auth.Config{
+			Conn:               conn,
+			Querier:            querier,
+			JWT:                jwtMock,
+			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
+			Logger:             logger,
+			RefreshTokenExpiry: 30 * 24 * time.Hour,
+		})
+		require.NoError(t, err)
+
+		userID := uuid.New()
+		sessionID := uuid.New()
+
+		querier.On("RevokeUserSession", ctx, database.RevokeUserSessionParams{
+			ID:     sessionID,
+			UserID: userID,
+		}).Return(nil)
+
+		err = service.RevokeSession(ctx, userID.String(), sessionID.String())
+
+		require.NoError(t, err)
+		querier.AssertExpectations(t)
+	})
+
+	t.Run("invalid user ID", func(t *testing.T) {
+		conn := &mockTxBeginner{}
+		querier := &mockQuerier{}
+		jwtMock := &mockJWT{}
+		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
+		logger := slog.Default()
+
+		service, err := auth.NewService(auth.Config{
+			Conn:               conn,
+			Querier:            querier,
+			JWT:                jwtMock,
+			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
+			Logger:             logger,
+			RefreshTokenExpiry: 30 * 24 * time.Hour,
+		})
+		require.NoError(t, err)
+
+		sessionID := uuid.New()
+
+		err = service.RevokeSession(ctx, "invalid-uuid", sessionID.String())
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid user ID")
+	})
+
+	t.Run("invalid session ID", func(t *testing.T) {
+		conn := &mockTxBeginner{}
+		querier := &mockQuerier{}
+		jwtMock := &mockJWT{}
+		tokenMgr := &mockTokenManager{}
+		ipCrypt := &mockIPCrypt{}
+		logger := slog.Default()
+
+		service, err := auth.NewService(auth.Config{
+			Conn:               conn,
+			Querier:            querier,
+			JWT:                jwtMock,
+			TokenManager:       tokenMgr,
+			IPCrypt:            ipCrypt,
+			Logger:             logger,
+			RefreshTokenExpiry: 30 * 24 * time.Hour,
+		})
+		require.NoError(t, err)
+
+		userID := uuid.New()
+
+		err = service.RevokeSession(ctx, userID.String(), "invalid-uuid")
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid session ID")
 	})
 }

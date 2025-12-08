@@ -398,7 +398,7 @@ func (s *Service) createRefreshToken(ctx context.Context, userID uuid.UUID, sess
 		return "", fmt.Errorf("failed to hash refresh token: %w", err)
 	}
 
-	expiresAt := time.Now().Add(s.refreshTokenExpiry)
+	expiresAt := time.Now().UTC().Add(s.refreshTokenExpiry)
 
 	encryptedIP, err := s.ipCrypt.Encrypt(metadata.ClientIP)
 	if err != nil {
@@ -409,7 +409,7 @@ func (s *Service) createRefreshToken(ctx context.Context, userID uuid.UUID, sess
 	if sessionStartTime != nil {
 		sessionStart = *sessionStartTime
 	} else {
-		sessionStart = time.Now()
+		sessionStart = time.Now().UTC()
 	}
 
 	metadataJSON := map[string]any{
@@ -457,7 +457,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*AuthRespon
 		return nil, err
 	}
 
-	if time.Now().After(storedToken.ExpiresAt) {
+	if time.Now().UTC().After(storedToken.ExpiresAt) {
 		s.logger.Warn("refresh token has expired", "user_id", storedToken.UserID)
 		return nil, ErrInvalidToken
 	}
