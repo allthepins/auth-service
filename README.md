@@ -21,6 +21,8 @@ Core authentication endpoints implemented thus far:
 - `POST /auth/login` - Authenticate user  
 - `POST /auth/refresh` - Refresh access token
 - `POST /auth/logout` - Revoke refresh token
+- `GET /auth/sessions` - List all active sessions
+- `DELETE /auth/sessions/{sessionId}` - Revoke specific session
 
 ## Getting started
 
@@ -127,9 +129,9 @@ Run `make help` for a descriptive list of what's available.
 - [x] Implement the `POST /auth/refresh` and `POST /auth/logout` endpoints.
 
 #### Session management
-- [ ] Add `metadata` column to `refresh_tokens` table.
-- [ ] Implement service logic for listing and revoking sessions.
-- [ ] Implement the protected `GET /auth/sessions` and `DELETE /auth/sessions/{id}` endpoints.
+- [x] Add `metadata` column to `refresh_tokens` table.
+- [x] Implement service logic for listing and revoking sessions.
+- [x] Implement the protected `GET /auth/sessions` and `DELETE /auth/sessions/{id}` endpoints.
 
 ### Phase 3: Feature expansion
 
