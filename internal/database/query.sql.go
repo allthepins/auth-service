@@ -48,16 +48,18 @@ func (q *Queries) CreateIdentity(ctx context.Context, arg CreateIdentityParams) 
 }
 
 const createRefreshToken = `-- name: CreateRefreshToken :one
-INSERT INTO "auth.refresh_tokens" (id, user_id, token_hash, expires_at)
-VALUES ($1, $2, $3, $4)
-RETURNING id, user_id, token_hash, expires_at, revoked_at, created_at
+INSERT INTO "auth.refresh_tokens" (id, user_id, token_hash, expires_at, last_used_at, metadata)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, user_id, token_hash, expires_at, revoked_at, created_at, last_used_at, metadata
 `
 
 type CreateRefreshTokenParams struct {
-	ID        uuid.UUID `json:"id"`
-	UserID    uuid.UUID `json:"user_id"`
-	TokenHash string    `json:"token_hash"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ID         uuid.UUID  `json:"id"`
+	UserID     uuid.UUID  `json:"user_id"`
+	TokenHash  string     `json:"token_hash"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	LastUsedAt *time.Time `json:"last_used_at"`
+	Metadata   []byte     `json:"metadata"`
 }
 
 func (q *Queries) CreateRefreshToken(ctx context.Context, arg CreateRefreshTokenParams) (AuthRefreshToken, error) {
@@ -66,6 +68,8 @@ func (q *Queries) CreateRefreshToken(ctx context.Context, arg CreateRefreshToken
 		arg.UserID,
 		arg.TokenHash,
 		arg.ExpiresAt,
+		arg.LastUsedAt,
+		arg.Metadata,
 	)
 	var i AuthRefreshToken
 	err := row.Scan(
@@ -75,6 +79,8 @@ func (q *Queries) CreateRefreshToken(ctx context.Context, arg CreateRefreshToken
 		&i.ExpiresAt,
 		&i.RevokedAt,
 		&i.CreatedAt,
+		&i.LastUsedAt,
+		&i.Metadata,
 	)
 	return i, err
 }
@@ -129,7 +135,7 @@ func (q *Queries) GetIdentityByProvider(ctx context.Context, arg GetIdentityByPr
 }
 
 const getRefreshTokenByHash = `-- name: GetRefreshTokenByHash :one
-SELECT id, user_id, token_hash, expires_at, revoked_at, created_at FROM "auth.refresh_tokens"
+SELECT id, user_id, token_hash, expires_at, revoked_at, created_at, last_used_at, metadata FROM "auth.refresh_tokens"
 WHERE token_hash = $1 AND revoked_at IS NULL
 LIMIT 1
 `
@@ -144,6 +150,8 @@ func (q *Queries) GetRefreshTokenByHash(ctx context.Context, tokenHash string) (
 		&i.ExpiresAt,
 		&i.RevokedAt,
 		&i.CreatedAt,
+		&i.LastUsedAt,
+		&i.Metadata,
 	)
 	return i, err
 }
@@ -166,6 +174,41 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (AuthUser, erro
 	return i, err
 }
 
+const listUserRefreshTokens = `-- name: ListUserRefreshTokens :many
+SELECT id, user_id, token_hash, expires_at, revoked_at, created_at, last_used_at, metadata FROM "auth.refresh_tokens"
+WHERE user_id = $1 AND revoked_at IS NULL
+ORDER BY last_used_at DESC
+`
+
+func (q *Queries) ListUserRefreshTokens(ctx context.Context, userID uuid.UUID) ([]AuthRefreshToken, error) {
+	rows, err := q.db.Query(ctx, listUserRefreshTokens, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuthRefreshToken
+	for rows.Next() {
+		var i AuthRefreshToken
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.TokenHash,
+			&i.ExpiresAt,
+			&i.RevokedAt,
+			&i.CreatedAt,
+			&i.LastUsedAt,
+			&i.Metadata,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const revokeAllUserRefreshTokens = `-- name: RevokeAllUserRefreshTokens :exec
 UPDATE "auth.refresh_tokens"
 SET revoked_at = NOW()
@@ -185,5 +228,21 @@ where token_hash = $1
 
 func (q *Queries) RevokeRefreshToken(ctx context.Context, tokenHash string) error {
 	_, err := q.db.Exec(ctx, revokeRefreshToken, tokenHash)
+	return err
+}
+
+const revokeUserSession = `-- name: RevokeUserSession :exec
+UPDATE "auth.refresh_tokens"
+SET revoked_at = NOW()
+WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+`
+
+type RevokeUserSessionParams struct {
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) RevokeUserSession(ctx context.Context, arg RevokeUserSessionParams) error {
+	_, err := q.db.Exec(ctx, revokeUserSession, arg.ID, arg.UserID)
 	return err
 }

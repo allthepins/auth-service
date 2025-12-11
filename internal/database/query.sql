@@ -19,8 +19,8 @@ WHERE id = $1
 LIMIT 1;
 
 -- name: CreateRefreshToken :one
-INSERT INTO "auth.refresh_tokens" (id, user_id, token_hash, expires_at)
-VALUES ($1, $2, $3, $4)
+INSERT INTO "auth.refresh_tokens" (id, user_id, token_hash, expires_at, last_used_at, metadata)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING *;
 
 -- name: GetRefreshTokenByHash :one
@@ -37,3 +37,13 @@ where token_hash = $1;
 UPDATE "auth.refresh_tokens"
 SET revoked_at = NOW()
 WHERE user_id = $1 AND revoked_at IS NULL;
+
+-- name: ListUserRefreshTokens :many
+SELECT * FROM "auth.refresh_tokens"
+WHERE user_id = $1 AND revoked_at IS NULL
+ORDER BY last_used_at DESC;
+
+-- name: RevokeUserSession :exec
+UPDATE "auth.refresh_tokens"
+SET revoked_at = NOW()
+WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL;

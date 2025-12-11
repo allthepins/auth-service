@@ -8,9 +8,11 @@ import (
 	"os"
 
 	"github.com/allthepins/auth-service/internal/api/handlers"
+	"github.com/allthepins/auth-service/internal/api/middleware"
 	"github.com/allthepins/auth-service/internal/auth"
 	"github.com/allthepins/auth-service/internal/config"
 	"github.com/allthepins/auth-service/internal/database"
+	"github.com/allthepins/auth-service/internal/platform/ipcrypt"
 	"github.com/allthepins/auth-service/internal/platform/jwt"
 	"github.com/allthepins/auth-service/internal/platform/logger"
 	"github.com/allthepins/auth-service/internal/platform/token"
@@ -63,6 +65,13 @@ func main() {
 	// Init token manager
 	tokenManager := token.New()
 
+	// Init IP encryptor
+	ipEncryptor, err := ipcrypt.New(cfg.Auth.IPCryptKey)
+	if err != nil {
+		log.Error("failed to initialize IP encryptor", "error", err)
+		os.Exit(1)
+	}
+
 	// Init DB queries
 	// NOTE: database.Queries.WithTx returns *Queries, but auth.Querier expects
 	// WithTx to return database.Querier. This thin adapter bridges the gap.
@@ -75,6 +84,7 @@ func main() {
 		Querier:            queries,
 		JWT:                jwtAuth,
 		TokenManager:       tokenManager,
+		IPCrypt:            ipEncryptor,
 		Logger:             log,
 		RefreshTokenExpiry: cfg.Auth.RefreshTokenExpiry,
 	})
@@ -92,6 +102,7 @@ func main() {
 	// Global middleware
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
+	r.Use(middleware.ExtractRequestMetadata)
 	r.Use(httplog.RequestLogger(log, &httplog.Options{
 		Level:         slog.LevelInfo,
 		Schema:        httplog.SchemaOTEL,
@@ -109,6 +120,13 @@ func main() {
 	r.Post("/auth/login", authHandler.Login)
 	r.Post("/auth/refresh", authHandler.Refresh)
 	r.Post("/auth/logout", authHandler.Logout)
+
+	// Protected routes
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.Auth(jwtAuth, log))
+		r.Get("/auth/sessions", authHandler.ListSessions)
+		r.Delete("/auth/sessions/{sessionId}", authHandler.RevokeSession)
+	})
 
 	// Start server
 	addr := fmt.Sprintf(":%s", cfg.Server.Port)

@@ -7,9 +7,12 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
+	"github.com/allthepins/auth-service/internal/api/middleware"
 	"github.com/allthepins/auth-service/internal/api/response"
 	"github.com/allthepins/auth-service/internal/auth"
+	"github.com/go-chi/chi/v5"
 )
 
 // AuthService defines the interface for authentication operations.
@@ -19,6 +22,8 @@ type AuthService interface {
 	Login(ctx context.Context, req auth.LoginRequest) (*auth.AuthResponse, error)
 	Refresh(ctx context.Context, refreshToken string) (*auth.AuthResponse, error)
 	Logout(ctx context.Context, refreshToken string) error
+	ListUserSessions(ctx context.Context, userID string) ([]auth.Session, error)
+	RevokeSession(ctx context.Context, userID, sessionID string) error
 }
 
 // AuthHandler handles authentication-related HTTP requests.
@@ -160,6 +165,63 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ListSessions handles listing user sessions.
+// GET /auth/sessions
+func (h *AuthHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r.Context())
+	if userID == "" {
+		if err := response.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "User ID not found in context"); err != nil {
+			h.logger.Error("failed to write error response", "error", err)
+		}
+		return
+	}
+
+	sessions, err := h.service.ListUserSessions(r.Context(), userID)
+	if err != nil {
+		if errors.Is(err, auth.ErrUserNotFound) {
+			if err = response.Error(w, http.StatusNotFound, "USER_NOT_FOUND", "User not found"); err != nil {
+				h.logger.Error("failed to write error response", "error", err)
+			}
+			return
+		}
+
+		h.handleError(w, err)
+		return
+	}
+
+	if err := response.JSON(w, http.StatusOK, sessions); err != nil {
+		h.logger.Error("failed to write response", "error", err)
+	}
+}
+
+// RevokeSession handles revoking a specific session.
+// DELETE /auth/sessions/{sessionId}
+func (h *AuthHandler) RevokeSession(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r.Context())
+	if userID == "" {
+		if err := response.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "User ID not found in context"); err != nil {
+			h.logger.Error("failed to write error response", "error", err)
+		}
+		return
+	}
+
+	sessionID := chi.URLParam(r, "sessionId")
+	if sessionID == "" {
+		if err := response.Error(w, http.StatusBadRequest, "BAD_REQUEST", "Session ID is required"); err != nil {
+			h.logger.Error("failed to write error response", "error", err)
+		}
+		return
+	}
+
+	err := h.service.RevokeSession(r.Context(), userID, sessionID)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleError maps service errors to appropriate HTTP responses.
 func (h *AuthHandler) handleError(w http.ResponseWriter, err error) {
 	var respErr error
@@ -177,6 +239,10 @@ func (h *AuthHandler) handleError(w http.ResponseWriter, err error) {
 		respErr = response.Error(w, http.StatusBadRequest, "INVALID_INPUT", err.Error())
 	case errors.Is(err, auth.ErrInvalidToken):
 		respErr = response.Error(w, http.StatusUnauthorized, "INVALID_TOKEN", "Invalid or expired token")
+	case errors.Is(err, auth.ErrSessionNotFound):
+		respErr = response.Error(w, http.StatusNotFound, "SESSION_NOT_FOUND", "Session not found")
+	case strings.Contains(err.Error(), "invalid session ID"):
+		respErr = response.Error(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid session ID format")
 	default:
 		h.logger.Error("unexpected error", "error", err)
 		respErr = response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "An internal error occurred")

@@ -119,7 +119,7 @@ Run `make help` for a descriptive list of what's available.
 - [x] Implement centralized middleware for request logging. (Used `chi`'s `httplog`')
 - [x] Implement `Authenticate` middleware for JWT validation.
 - [x] Implement panic recovery middleware. (Used `chimiddleware` panic recovery in the `httplog` configuration)
-- [ ] Add unit tests for all middleware.
+- [x] Add unit tests for all middleware.
 
 #### Session lifecycle
 - [x] Add `refresh_tokens` table migration.
