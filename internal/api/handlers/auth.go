@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/allthepins/auth-service/internal/api/middleware"
 	"github.com/allthepins/auth-service/internal/api/response"
@@ -177,6 +178,13 @@ func (h *AuthHandler) ListSessions(w http.ResponseWriter, r *http.Request) {
 
 	sessions, err := h.service.ListUserSessions(r.Context(), userID)
 	if err != nil {
+		if errors.Is(err, auth.ErrUserNotFound) {
+			if err = response.Error(w, http.StatusNotFound, "USER_NOT_FOUND", "User not found"); err != nil {
+				h.logger.Error("failed to write error response", "error", err)
+			}
+			return
+		}
+
 		h.handleError(w, err)
 		return
 	}
@@ -231,6 +239,10 @@ func (h *AuthHandler) handleError(w http.ResponseWriter, err error) {
 		respErr = response.Error(w, http.StatusBadRequest, "INVALID_INPUT", err.Error())
 	case errors.Is(err, auth.ErrInvalidToken):
 		respErr = response.Error(w, http.StatusUnauthorized, "INVALID_TOKEN", "Invalid or expired token")
+	case errors.Is(err, auth.ErrSessionNotFound):
+		respErr = response.Error(w, http.StatusNotFound, "SESSION_NOT_FOUND", "Session not found")
+	case strings.Contains(err.Error(), "invalid session ID"):
+		respErr = response.Error(w, http.StatusBadRequest, "BAD_REQUEST", "Invalid session ID format")
 	default:
 		h.logger.Error("unexpected error", "error", err)
 		respErr = response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "An internal error occurred")

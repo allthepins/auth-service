@@ -11,9 +11,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/allthepins/auth-service/internal/api/handlers"
+	"github.com/allthepins/auth-service/internal/api/middleware"
 	"github.com/allthepins/auth-service/internal/auth"
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -474,6 +477,259 @@ func TestAuthHandler_Logout(t *testing.T) {
 					Code string `json:"code"`
 				}
 				_ = json.Unmarshal(w.Body.Bytes(), &errResp)
+				assert.Equal(t, tt.wantErrorCode, errResp.Code)
+			}
+
+			mockService.AssertExpectations(t)
+		})
+	}
+}
+
+func TestAuthHandler_ListSessions(t *testing.T) {
+	tests := []struct {
+		name          string
+		userID        string // From JWT middleware context
+		mockSetup     func(*mockAuthService)
+		wantStatus    int
+		wantErrorCode string
+		checkResponse func(*testing.T, *httptest.ResponseRecorder)
+	}{
+		{
+			name:   "successful list sessions",
+			userID: "user-123",
+			mockSetup: func(m *mockAuthService) {
+				sessions := []auth.Session{
+					{
+						ID:           "session-1",
+						ClientIP:     "192.168.1.*",
+						LastUsedAt:   time.Now().Add(-1 * time.Hour),
+						SessionStart: time.Now().Add(-24 * time.Hour),
+						ExpiresAt:    time.Now().Add(29 * 24 * time.Hour),
+					},
+					{
+						ID:           "session-2",
+						ClientIP:     "10.0.0.*",
+						LastUsedAt:   time.Now().Add(-5 * time.Minute),
+						SessionStart: time.Now().Add(-2 * time.Hour),
+						ExpiresAt:    time.Now().Add(29 * 24 * time.Hour),
+					},
+				}
+				m.On("ListUserSessions", mock.Anything, "user-123").
+					Return(sessions, nil)
+			},
+			wantStatus: http.StatusOK,
+			checkResponse: func(t *testing.T, w *httptest.ResponseRecorder) {
+				var sessions []auth.Session
+				err := json.Unmarshal(w.Body.Bytes(), &sessions)
+				require.NoError(t, err)
+				assert.Len(t, sessions, 2)
+				assert.Equal(t, "session-1", sessions[0].ID)
+				assert.Equal(t, "192.168.1.*", sessions[0].ClientIP)
+			},
+		},
+		{
+			name:   "empty session list",
+			userID: "user-456",
+			mockSetup: func(m *mockAuthService) {
+				m.On("ListUserSessions", mock.Anything, "user-456").
+					Return([]auth.Session{}, nil)
+			},
+			wantStatus: http.StatusOK,
+			checkResponse: func(t *testing.T, w *httptest.ResponseRecorder) {
+				var sessions []auth.Session
+				err := json.Unmarshal(w.Body.Bytes(), &sessions)
+				require.NoError(t, err)
+				assert.Len(t, sessions, 0)
+			},
+		},
+		{
+			name:   "user not found",
+			userID: "nonexistent-user",
+			mockSetup: func(m *mockAuthService) {
+				m.On("ListUserSessions", mock.Anything, "nonexistent-user").
+					Return(nil, auth.ErrUserNotFound)
+			},
+			wantStatus:    http.StatusNotFound,
+			wantErrorCode: "USER_NOT_FOUND",
+		},
+		{
+			name:   "database error",
+			userID: "user-789",
+			mockSetup: func(m *mockAuthService) {
+				m.On("ListUserSessions", mock.Anything, "user-789").
+					Return(nil, errors.New("database connection failed"))
+			},
+			wantStatus:    http.StatusInternalServerError,
+			wantErrorCode: "INTERNAL_ERROR",
+		},
+		{
+			name:          "missing user ID from context",
+			userID:        "", // Simulates missing auth middleware
+			wantStatus:    http.StatusUnauthorized,
+			wantErrorCode: "UNAUTHORIZED",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockService := new(mockAuthService)
+			if tt.mockSetup != nil {
+				tt.mockSetup(mockService)
+			}
+
+			logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+			handler := handlers.NewAuthHandler(mockService, logger)
+
+			req := httptest.NewRequest(http.MethodGet, "/auth/sessions", nil)
+
+			// Add user ID to context
+			if tt.userID != "" {
+				req = req.WithContext(middleware.SetUserIDForTesting(req.Context(), tt.userID))
+			}
+
+			w := httptest.NewRecorder()
+			handler.ListSessions(w, req)
+
+			assert.Equal(t, tt.wantStatus, w.Code)
+
+			if tt.wantErrorCode != "" {
+				var errResp struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				}
+				err := json.Unmarshal(w.Body.Bytes(), &errResp)
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantErrorCode, errResp.Code)
+			}
+
+			if tt.checkResponse != nil {
+				tt.checkResponse(t, w)
+			}
+
+			mockService.AssertExpectations(t)
+		})
+	}
+}
+
+func TestAuthHandler_RevokeSession(t *testing.T) {
+	tests := []struct {
+		name          string
+		userID        string // From JWT middleware context
+		sessionID     string // From URL path parameter
+		mockSetup     func(*mockAuthService)
+		wantStatus    int
+		wantErrorCode string
+	}{
+		{
+			name:      "successful revoke",
+			userID:    "user-123",
+			sessionID: "session-456",
+			mockSetup: func(m *mockAuthService) {
+				m.On("RevokeSession", mock.Anything, "user-123", "session-456").
+					Return(nil)
+			},
+			wantStatus: http.StatusNoContent,
+		},
+		{
+			name:      "session not found",
+			userID:    "user-123",
+			sessionID: "nonexistent-session",
+			mockSetup: func(m *mockAuthService) {
+				m.On("RevokeSession", mock.Anything, "user-123", "nonexistent-session").
+					Return(auth.ErrSessionNotFound)
+			},
+			wantStatus:    http.StatusNotFound,
+			wantErrorCode: "SESSION_NOT_FOUND",
+		},
+		{
+			name:      "session belongs to different user",
+			userID:    "user-123",
+			sessionID: "other-user-session",
+			mockSetup: func(m *mockAuthService) {
+				m.On("RevokeSession", mock.Anything, "user-123", "other-user-session").
+					Return(auth.ErrSessionNotFound) // Security: return not found
+			},
+			wantStatus:    http.StatusNotFound,
+			wantErrorCode: "SESSION_NOT_FOUND",
+		},
+		{
+			name:      "invalid session ID format",
+			userID:    "user-123",
+			sessionID: "invalid-uuid",
+			mockSetup: func(m *mockAuthService) {
+				m.On("RevokeSession", mock.Anything, "user-123", "invalid-uuid").
+					Return(fmt.Errorf("invalid session ID format"))
+			},
+			wantStatus:    http.StatusBadRequest,
+			wantErrorCode: "BAD_REQUEST",
+		},
+		{
+			name:      "database error",
+			userID:    "user-123",
+			sessionID: "session-456",
+			mockSetup: func(m *mockAuthService) {
+				m.On("RevokeSession", mock.Anything, "user-123", "session-456").
+					Return(errors.New("database connection failed"))
+			},
+			wantStatus:    http.StatusInternalServerError,
+			wantErrorCode: "INTERNAL_ERROR",
+		},
+		{
+			name:          "missing user ID from context",
+			userID:        "", // Simulate missing auth middleware
+			sessionID:     "session-456",
+			wantStatus:    http.StatusUnauthorized,
+			wantErrorCode: "UNAUTHORIZED",
+		},
+		{
+			name:          "missing session ID from path",
+			userID:        "user-123",
+			sessionID:     "", // Empty session ID
+			wantStatus:    http.StatusBadRequest,
+			wantErrorCode: "BAD_REQUEST",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockService := new(mockAuthService)
+			if tt.mockSetup != nil {
+				tt.mockSetup(mockService)
+			}
+
+			logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+			handler := handlers.NewAuthHandler(mockService, logger)
+
+			req := httptest.NewRequest(
+				http.MethodDelete,
+				fmt.Sprintf("/auth/sessions/%s", tt.sessionID),
+				nil,
+			)
+
+			// Add user ID to context
+			if tt.userID != "" {
+				req = req.WithContext(middleware.SetUserIDForTesting(req.Context(), tt.userID))
+			}
+
+			// Add session ID to chi URL params
+			if tt.sessionID != "" {
+				rctx := chi.NewRouteContext()
+				rctx.URLParams.Add("sessionId", tt.sessionID)
+				req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+			}
+
+			w := httptest.NewRecorder()
+			handler.RevokeSession(w, req)
+
+			assert.Equal(t, tt.wantStatus, w.Code)
+
+			if tt.wantErrorCode != "" {
+				var errResp struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				}
+				err := json.Unmarshal(w.Body.Bytes(), &errResp)
+				require.NoError(t, err)
 				assert.Equal(t, tt.wantErrorCode, errResp.Code)
 			}
 

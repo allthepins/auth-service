@@ -64,3 +64,9 @@ func GetUserID(ctx context.Context) string {
 	}
 	return ""
 }
+
+// SetUserIDForTesting sets a user ID in the context for testing purposes.
+// NOTE: It is used in tests to simulate authenticated requests.
+func SetUserIDForTesting(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, userIDKey, userID)
+}
