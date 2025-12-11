@@ -199,44 +199,96 @@ paths:
       tags:
         - Session Management
       summary: List Active Sessions
-      description: Retrieves a list of all active sessions for the authenticated user.
+      description: |
+        Retrieves a list of all active sessions for the authenticated user.
+        Each session represents a refresh token that hasn't been revoked or expired.
+        IP addresses are masked for GDPR compliance.
       security:
         - bearerAuth: []
       responses:
         '200':
-          description: A list of active sessions.
+          description: A list of active sessions (may be empty)
           content:
             application/json:
               schema:
                 type: array
                 items:
                   $ref: '#/components/schemas/Session'
+              examples:
+                multipleSessions:
+                  summary: User with multiple active sessions
+                  value:
+                    - id: "123e4567-e89b-12d3-a456-426614174000"
+                      clientIp: "192.168.1.*"
+                      sessionStart: "2025-12-10T10:00:00Z"
+                      lastUsedAt: "2025-12-11T15:30:00Z"
+                      expiresAt: "2026-01-10T10:00:00Z"
+                    - id: "987fcdeb-51a2-43f1-b8e9-123456789abc"
+                      clientIp: "10.0.0.*"
+                      sessionStart: "2025-12-11T08:00:00Z"
+                      lastUsedAt: "2025-12-11T14:20:00Z"
+                      expiresAt: "2026-01-11T08:00:00Z"
+                noSessions:
+                  summary: User with no active sessions
+                  value: []
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Authenticated user not found in database
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                code: "USER_NOT_FOUND"
+                message: "User not found"
 
   /auth/sessions/{sessionId}:
     delete:
       tags:
         - Session Management
       summary: Revoke a Specific Session
-      description: Remotely logs out a specific device or session.
+      description: |
+        Remotely logs out a specific device or session by revoking its refresh token.
+        
+        **Security Notes:**
+        - Only sessions belonging to the authenticated user can be revoked
+        - Returns 404 if session doesn't exist OR belongs to another user (prevents session enumeration)
+        - Once revoked, the refresh token can no longer be used to obtain new access tokens
       security:
         - bearerAuth: []
       parameters:
         - name: sessionId
           in: path
           required: true
-          description: The unique identifier of the session to revoke.
+          description: The unique identifier (UUID) of the session to revoke
           schema:
             type: string
             format: uuid
+          example: "123e4567-e89b-12d3-a456-426614174000"
       responses:
         '204':
-          description: The session was successfully revoked.
+          description: Session successfully revoked (no content returned)
+        '400':
+          description: Invalid session ID format (not a valid UUID)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                code: "BAD_REQUEST"
+                message: "Invalid session ID format"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          $ref: '#/components/responses/NotFound'
+          description: Session not found or belongs to another user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                code: "SESSION_NOT_FOUND"
+                message: "Session not found"
 
   /auth/forgot-password:
     post:
@@ -455,20 +507,39 @@ components:
           example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
     Session:
       type: object
+      description: Represents an active user session (refresh token)
       properties:
         id:
           type: string
           format: uuid
-        ipAddress:
+          description: Unique identifier for the session (refresh token ID)
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        clientIp:
           type: string
-          format: ipv4
-          example: "89.123.45.67"
-        userAgent:
+          description: Masked IP address for GDPR compliance (last octet replaced with asterisk)
+          example: "192.168.1.*"
+          pattern: "^(\\d{1,3}\\.){3}\\*$"
+        sessionStart:
           type: string
-          example: "Chrome/128.0.0.0 Safari/537.36"
+          format: date-time
+          description: When this session was created (first login)
+          example: "2025-12-10T10:00:00Z"
         lastUsedAt:
           type: string
           format: date-time
+          description: When this session was last used to refresh tokens
+          example: "2025-12-11T15:30:00Z"
+        expiresAt:
+          type: string
+          format: date-time
+          description: When this session will expire (typically 30 days from creation)
+          example: "2026-01-10T10:00:00Z"
+      required:
+        - id
+        - clientIp
+        - sessionStart
+        - lastUsedAt
+        - expiresAt
     PasswordResetRequest:
       type: object
       properties:
@@ -484,10 +555,26 @@ components:
       properties:
         code:
           type: string
+          description: Machine-readable error code
+          enum:
+            - BAD_REQUEST
+            - UNAUTHORIZED
+            - INVALID_CREDENTIALS
+            - INVALID_PROVIDER
+            - INVALID_INPUT
+            - INVALID_TOKEN
+            - USER_EXISTS
+            - USER_NOT_FOUND
+            - SESSION_NOT_FOUND
+            - INTERNAL_ERROR
           example: "INVALID_CREDENTIALS"
         message:
           type: string
+          description: Human-readable error message
           example: "The credentials provided are incorrect."
+      required:
+        - code
+        - message
 
   responses:
     BadRequest:
