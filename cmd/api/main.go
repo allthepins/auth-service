@@ -18,6 +18,7 @@ import (
 	"github.com/allthepins/auth-service/internal/platform/token"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 	"github.com/go-chi/httplog/v3"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -99,6 +100,15 @@ func main() {
 	// Setup router
 	r := chi.NewRouter()
 
+	// CORS middleware
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   cfg.Server.AllowedOrigins,
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
+
 	// Global middleware
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
@@ -130,7 +140,7 @@ func main() {
 
 	// Start server
 	addr := fmt.Sprintf(":%s", cfg.Server.Port)
-	log.Info("server listening", "address", addr)
+	log.Info("server listening", "address", addr, "allowed_origins", cfg.Server.AllowedOrigins)
 
 	if err := http.ListenAndServe(addr, r); err != nil {
 		log.Error("server failed", "error", err)
