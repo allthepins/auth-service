@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
 // ServerConfig holds server-related config.
 type ServerConfig struct {
-	Port string
+	Port           string
+	AllowedOrigins []string
 }
 
 // DatabaseConfig holds database-related config.
@@ -82,6 +84,29 @@ func getEnvDuration(key string, defaultVal time.Duration) time.Duration {
 	return value
 }
 
+// getEnvSlice retrieves a comma-separated env variable and returns it as a slice.
+// Trims whitespace from each element.
+func getEnvSlice(key string, defaultVal []string) []string {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultVal
+	}
+
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+
+	if len(result) == 0 {
+		return defaultVal
+	}
+	return result
+}
+
 // validate checks that all required configuration values are present.
 func (c *Config) validate() error {
 	if c.Database.URL == "" {
@@ -103,6 +128,10 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		Server: ServerConfig{
 			Port: getEnv("API_PORT", "8080"),
+			AllowedOrigins: getEnvSlice("ALLOWED_ORIGINS", []string{
+				"http://localhost:3000",
+				"http://127.0.0.1:3000",
+			}),
 		},
 		Database: DatabaseConfig{
 			URL: os.Getenv("DATABASE_URL"),
